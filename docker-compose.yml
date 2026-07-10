@@ -1,0 +1,58 @@
+name: dva
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: dva-clickhouse
+    ports:
+      - "19000:9000"
+      - "18123:8123"
+    environment:
+      CLICKHOUSE_DB: poc
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: admin
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/poc:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mariadb:
+    image: mariadb:11
+    container_name: dva-mariadb
+    ports:
+      - "13306:3306"
+    environment:
+      MARIADB_DATABASE: poc
+      MARIADB_USER: admin
+      MARIADB_PASSWORD: admin
+      MARIADB_ROOT_PASSWORD: root
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./mariadb/poc:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  trino:
+    image: trinodb/trino:452
+    container_name: dva-trino
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      mariadb:
+        condition: service_healthy
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+
+volumes:
+  clickhouse-data:
+  mariadb-data:
