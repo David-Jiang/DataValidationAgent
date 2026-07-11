@@ -39,6 +39,8 @@ def get_table_schema(dataset_urn: str) -> str:
         return json.dumps(schema, ensure_ascii=False, indent=2)
     except DataHubError as e:
         return f"ERROR: {e}"
+    except Exception as e:
+        return f"ERROR: 取得 table schema 時發生例外: {e}"
 
 
 @mcp.tool()
@@ -52,6 +54,8 @@ def get_field_spec() -> str:
         return _SCHEMA_PATH.read_text(encoding="utf-8")
     except FileNotFoundError:
         return "ERROR: field_spec schema 檔案未找到,請確認 Server 部署是否正確包含 core/schemas/field_spec.schema.json"
+    except Exception as e:
+        return f"ERROR: 讀取 field_spec schema 時發生例外: {e}"
 
 
 @mcp.tool()
@@ -66,6 +70,8 @@ def gen_mock_data(field_spec_json: str, row_count: int = 100) -> str:
         spec = parse_field_spec(field_spec_json)
     except ValueError as e:
         return f"ERROR: {e}"
+    except Exception as e:
+        return f"ERROR: 解析 field_spec 時發生例外: {e}"
 
     try:
         return generate_mock_csv(spec, row_count=row_count)
@@ -85,6 +91,8 @@ def gen_validation_suite(table_name: str, field_spec_json: str) -> str:
         spec = parse_field_spec(field_spec_json)
     except ValueError as e:
         return f"ERROR: {e}"
+    except Exception as e:
+        return f"ERROR: 解析 field_spec 時發生例外: {e}"
 
     try:
         suite_dict = build_expectation_suite(table_name, spec)

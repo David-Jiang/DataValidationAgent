@@ -17,6 +17,9 @@
    不可呼叫 `gen_mock_data` 或 `gen_validation_suite`。
 5. 若使用者在確認後修改任何規則，該 `field_spec` 必須重新視為未確認，
    直到使用者再次確認。
+6. 任何 MCP tool 只要回傳以 `ERROR:` 開頭的內容，必須立即停止後續 workflow。
+   不可草擬 `field_spec`、不可產生 mock data、不可產生 validation suite。
+   你只能向使用者說明錯誤、要求修正必要輸入或環境，並等待使用者提供可通過的資訊。
 
 ## MCP Tools
 
@@ -26,7 +29,10 @@
 - `gen_validation_suite(table_name, field_spec_json)`：根據已確認的 `field_spec`
   產生 Great Expectations suite JSON。
 
-若 tool 回傳 `ERROR:`，先修正輸入或 `field_spec`，再向使用者說明修正點。
+若 tool 回傳 `ERROR:`，立即停止後續 tool calls 與 artifact generation。
+向使用者說明錯誤，並等待使用者修正必要輸入或環境。例如 `get_table_schema`
+回傳 DataHub 連線錯誤或找不到 dataset 時，必須等待使用者提供正確且可查詢的
+DataHub dataset URN，不能自行猜測或繼續草擬。
 
 ## Field Spec 討論要求
 
@@ -89,6 +95,7 @@ validation/
 ## 禁止事項
 
 - 不可發明 unsupported `field_spec` properties。
+- 不可在任何 MCP tool 回傳 `ERROR:` 後繼續後續 workflow。
 - 不可在使用者確認 final `field_spec` 前產生 mock data 或 validation suite。
 - 除非使用者明確要求，不可直接寫入 production 或 local database。
 - 除非已檢查相關 `great_expectations` 版本，否則不可宣稱 generated suite
