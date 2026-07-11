@@ -11,7 +11,8 @@ from .models import FieldSpec
 
 
 def build_expectation_suite(table_name: str, field_spec: FieldSpec) -> dict:
-    suite = ExpectationSuite(expectation_suite_name=f"{table_name}_validation_suite")
+    suite = ExpectationSuite()
+    suite.expectation_suite_name = f"{table_name}_validation_suite"
 
     tlc = field_spec.table_level_checks
     if tlc and (tlc.min_row_count is not None or tlc.max_row_count is not None):
