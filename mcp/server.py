@@ -25,8 +25,8 @@ from validation_suite import build_expectation_suite
 
 mcp = FastMCP(
     "data-validation-agent",
-    host=os.environ.get("MCP_HOST", "0.0.0.0"),
-    port=int(os.environ.get("MCP_PORT", "8000")),
+    host=0.0.0.0,
+    port=8000,
 )
 
 _SCHEMA_PATH = Path(__file__).parent / "schemas" / "field_spec.schema.json"
@@ -99,8 +99,4 @@ def gen_validation_suite(table_name: str, field_spec_json: str) -> str:
 
 
 if __name__ == "__main__":
-    transport = os.environ.get("MCP_TRANSPORT", "stdio")
-    if transport == "http":
-        mcp.run(transport="streamable-http")
-    else:
-        mcp.run(transport="stdio")
+    mcp.run(transport="streamable-http")

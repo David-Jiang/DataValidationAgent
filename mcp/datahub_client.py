@@ -5,22 +5,27 @@ Token 從環境變數讀取,不暴露給呼叫端(Claude)。
 from __future__ import annotations
 
 import os
-
 import httpx
 
-DATAHUB_GMS_URL = os.environ.get("DATAHUB_GMS_URL", "")
+DATAHUB_HOST = os.environ.get("DATAHUB_HOST", "")
 DATAHUB_TOKEN = os.environ.get("DATAHUB_TOKEN", "")
 
 _SCHEMA_QUERY = """
-query getDataset($urn: String!) {
+query datasetSchema($urn: String!) {
   dataset(urn: $urn) {
+    urn
     name
+    properties {
+      description
+    }
     schemaMetadata {
       fields {
         fieldPath
-        type
         nativeDataType
+        type
         description
+        nullable
+        isPartOfKey
       }
     }
   }
@@ -34,17 +39,16 @@ class DataHubError(Exception):
 
 def fetch_table_schema(dataset_urn: str) -> dict:
     """呼叫 DataHub API,回傳整理後的 schema 資訊。失敗時拋出 DataHubError。"""
-    if not DATAHUB_GMS_URL or not DATAHUB_TOKEN:
+    if not DATAHUB_HOST or not DATAHUB_TOKEN:
         raise DataHubError(
-            "DataHub 連線設定不完整,請確認環境變數 DATAHUB_GMS_URL 與 DATAHUB_TOKEN 已設定"
+            "DataHub 連線設定不完整,請確認環境變數 DATAHUB_HOST 與 DATAHUB_TOKEN 已設定"
         )
 
     try:
         resp = httpx.post(
-            f"{DATAHUB_GMS_URL}/api/graphql",
+            f"{DATAHUB_HOST}/api/graphql",
             json={"query": _SCHEMA_QUERY, "variables": {"urn": dataset_urn}},
             headers={"Authorization": f"Bearer {DATAHUB_TOKEN}"},
-            timeout=15.0,
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -64,14 +68,16 @@ def fetch_table_schema(dataset_urn: str) -> dict:
 
     fields = dataset.get("schemaMetadata", {}).get("fields", []) or []
     return {
-        "dataset_urn": dataset_urn,
-        "table_name": dataset.get("name"),
+        "table": dataset.get("name"),
+        "description": dataset.get("properties", {}).get("description"),
         "fields": [
             {
                 "name": f["fieldPath"],
                 "type": f.get("type"),
-                "native_type": f.get("nativeDataType"),
+                "nativeType": f.get("nativeDataType"),
                 "description": f.get("description"),
+                "nullable": f.get("nullable"),
+                "isPartOfKey": f.get("isPartOfKey"),
             }
             for f in fields
         ],
