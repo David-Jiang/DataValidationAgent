@@ -34,7 +34,7 @@ agent 才能產生 mock data 或 Great Expectations validation suite。
    - 只有直接來自 upstream metadata 的事實，才能使用 `source: "upstream_schema"`。
    - 使用者提供或確認過的規則，使用 `source: "discussed_with_user"`。
    - 針對缺少的 business semantics 提出聚焦問題，例如 enum 值、invalid tokens、
-     uniqueness、nullable 行為、日期格式、數值範圍、空字串行為與 table row count 預期。
+     uniqueness、nullable 行為、日期格式、數值範圍與空字串行為。
 
 4. 以使用者明確確認作為 gate。
    - 呼叫 `gen_mock_data` 或 `gen_validation_suite` 前，必須先整理 final `field_spec`
@@ -70,6 +70,8 @@ agent 才能產生 mock data 或 Great Expectations validation suite。
 適用於 Codex、Claude Code、IDE agent 或任何可操作使用者 workspace filesystem 的環境。
 
 - 預設路徑為當前 root 並使用下方建議檔案結構。
+- 寫入 field spec 時，如果目標版本檔名已存在，自動將 `version` 加 1，
+  並使用新的 `<version>_<table_name>_field_spec.json` 檔名寫入。
 - 寫檔後，回覆需列出實際檔案路徑。
 
 ### Chat Mode
@@ -79,7 +81,7 @@ agent 才能產生 mock data 或 Great Expectations validation suite。
 - 不宣稱已寫入檔案。
 - 每個 artifact 都以獨立區塊回傳，並標示建議檔名。
 - 建議格式：
-  - `建議檔名：validation/field_specs/<table_name>.field_spec.json`
+  - `建議檔名：validation/field_specs/<version>_<table_name>_field_spec.json`
     使用 `json` code block 回傳 `field_spec`。
   - `建議檔名：validation/suites/<table_name>_validation_suite.json`
     使用 `json` code block 回傳 validation suite。
@@ -93,7 +95,7 @@ agent 才能產生 mock data 或 Great Expectations validation suite。
 ```text
 validation/
   field_specs/
-    <table_name>.field_spec.json
+    <version>_<table_name>_field_spec.json
   suites/
     <table_name>_validation_suite.json
   mock_data/
@@ -122,22 +124,18 @@ validation/
 
 型別專屬規則：
 
-- `allow_empty_string` 與 `pattern` 只適用於 `dtype: "string"`。
-- `min_value` 與 `max_value` 只適用於 `dtype: "int"` 或 `dtype: "float"`。
+- `field_spec` 使用 dtype-specific schema；每個 field 只能包含該 `dtype` 支援的屬性。
+- `dtype: "string"` 必須包含 `allow_empty_string`、`enum_values` 與 `pattern`。
+- `dtype: "int"` 或 `dtype: "float"` 必須包含 `min_value` 與 `max_value`。
 - `datetime_after`、`datetime_before` 與 `expected_datetime_format`
-  只適用於 `dtype: "datetime"`。
-- 不適用的型別專屬欄位，在需要明確表達時應設為 `null`，不可用未經說明的假設帶過。
-
-目前 mock data generation 支援的常用 `semantic_tag` 包含：
-
-- `uuid`
-- `email`
-- `phone`
-- `currency`
-- `timestamp`
-- `free_text`
-- `enum`
-- `name`
+  必須出現在 `dtype: "datetime"` 欄位。
+- `dtype: "boolean"` 沒有型別專屬屬性。
+- 不適用於該 `dtype` 的屬性不可出現在 field 中，即使值是 `null` 也不可加入。
+- `invalid_value_tokens` 預設建議為 `["NULL", "null", "NA", "None", "none"]`；
+  若有欄位特定的 invalid tokens，需與使用者討論後加入。
+- 不使用 `semantic_tag`；mock data generation 只能依 `dtype` 與 `enum_values` 生成。
+- validation suite 會從 `fields[*].name` 自動產生 table columns check，
+  確認資料表至少包含 field spec 中列出的欄位。
 
 ## 協作方式
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Literal, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DType(str, Enum):
@@ -18,9 +18,10 @@ class DType(str, Enum):
 
 
 class FieldSpecField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     dtype: DType
-    semantic_tag: Optional[str] = None
     nullable: bool
     unique: bool
 
@@ -35,47 +36,92 @@ class FieldSpecField(BaseModel):
     datetime_before: Optional[str] = None
     expected_datetime_format: Optional[str] = None
 
-    invalid_value_tokens: list[str] = Field(default_factory=list)
+    invalid_value_tokens: list[str]
 
     confidence: Literal["high", "medium", "low"]
     source: Literal["upstream_schema", "discussed_with_user"]
 
+    @field_validator("invalid_value_tokens")
+    @classmethod
+    def check_unique_invalid_value_tokens(cls, v: list[str]) -> list[str]:
+        if len(v) != len(set(v)):
+            raise ValueError("invalid_value_tokens 不可包含重複值")
+        return v
+
     @model_validator(mode="after")
     def check_type_specific_fields(self) -> "FieldSpecField":
-        if self.dtype != DType.string:
-            if self.allow_empty_string is not None or self.pattern is not None:
+        fields_set = self.model_fields_set
+        string_fields = {"allow_empty_string", "enum_values", "pattern"}
+        numeric_fields = {"min_value", "max_value"}
+        datetime_fields = {"datetime_after", "datetime_before", "expected_datetime_format"}
+
+        if self.dtype == DType.string:
+            missing = string_fields - fields_set
+            if missing:
                 raise ValueError(
-                    f"欄位 '{self.name}' dtype 為 {self.dtype.value},"
-                    f"不應設定 allow_empty_string 或 pattern(string 專屬屬性),請設為 null"
+                    f"欄位 '{self.name}' dtype 為 string,缺少 string 專屬屬性: {sorted(missing)}"
                 )
-        if self.dtype != DType.datetime_:
-            if any([self.datetime_after, self.datetime_before, self.expected_datetime_format]):
+            forbidden = (numeric_fields | datetime_fields) & fields_set
+            if forbidden:
                 raise ValueError(
-                    f"欄位 '{self.name}' dtype 為 {self.dtype.value},"
-                    f"不應設定 datetime_after / datetime_before / expected_datetime_format,請設為 null"
+                    f"欄位 '{self.name}' dtype 為 string,"
+                    f"不應出現 numeric/datetime 專屬屬性: {sorted(forbidden)}"
                 )
-        if self.dtype not in (DType.int_, DType.float_):
-            if self.min_value is not None or self.max_value is not None:
+        elif self.dtype in (DType.int_, DType.float_):
+            missing = numeric_fields - fields_set
+            if missing:
                 raise ValueError(
                     f"欄位 '{self.name}' dtype 為 {self.dtype.value},"
-                    f"不應設定 min_value / max_value(int/float 專屬屬性),請設為 null"
+                    f"缺少 numeric 專屬屬性: {sorted(missing)}"
+                )
+            forbidden = (string_fields | datetime_fields) & fields_set
+            if forbidden:
+                raise ValueError(
+                    f"欄位 '{self.name}' dtype 為 {self.dtype.value},"
+                    f"不應出現 string/datetime 專屬屬性: {sorted(forbidden)}"
+                )
+            if self.dtype == DType.int_:
+                for attr in numeric_fields:
+                    value = getattr(self, attr)
+                    if value is not None and not float(value).is_integer():
+                        raise ValueError(
+                            f"欄位 '{self.name}' dtype 為 int,{attr} 必須是 integer 或 null"
+                        )
+            if (
+                self.min_value is not None
+                and self.max_value is not None
+                and self.min_value > self.max_value
+            ):
+                raise ValueError(f"欄位 '{self.name}' min_value 不可大於 max_value")
+        elif self.dtype == DType.datetime_:
+            missing = datetime_fields - fields_set
+            if missing:
+                raise ValueError(
+                    f"欄位 '{self.name}' dtype 為 datetime,"
+                    f"缺少 datetime 專屬屬性: {sorted(missing)}"
+                )
+            forbidden = (string_fields | numeric_fields) & fields_set
+            if forbidden:
+                raise ValueError(
+                    f"欄位 '{self.name}' dtype 為 datetime,"
+                    f"不應出現 string/numeric 專屬屬性: {sorted(forbidden)}"
+                )
+        else:
+            forbidden = (string_fields | numeric_fields | datetime_fields) & fields_set
+            if forbidden:
+                raise ValueError(
+                    f"欄位 '{self.name}' dtype 為 boolean,"
+                    f"不應出現型別專屬屬性: {sorted(forbidden)}"
                 )
         return self
 
 
-class TableLevelChecks(BaseModel):
-    min_row_count: Optional[int] = None
-    max_row_count: Optional[int] = None
-
-
 class FieldSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     table_name: str
     version: int = Field(ge=1)
-    generated_at: Optional[str] = None
-    based_on_upstream_schema_fetched_at: Optional[str] = None
-    based_on_upstream_dataset_urn: Optional[str] = None
     change_note: Optional[str] = None
-    table_level_checks: Optional[TableLevelChecks] = None
     fields: list[FieldSpecField] = Field(min_length=1)
 
     @field_validator("fields")

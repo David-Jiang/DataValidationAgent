@@ -10,6 +10,17 @@
 - `confidence`
 - `source`
 
+`field_spec` 使用 dtype-specific schema。每個 field 只能包含該 `dtype` 支援的屬性：
+
+- `string`：必須包含 `allow_empty_string`、`enum_values`、`pattern`
+- `int` / `float`：必須包含 `min_value`、`max_value`
+- `datetime`：必須包含 `datetime_after`、`datetime_before`、`expected_datetime_format`
+- `boolean`：不包含型別專屬屬性
+
+不適用於該 `dtype` 的屬性不可出現在 field 中，即使值是 `null` 也不可加入。
+`invalid_value_tokens` 預設建議為 `["NULL", "null", "NA", "None", "none"]`，
+但可依欄位語意與使用者確認後調整。
+
 必須區分 upstream schema fact 與 business expectation。DataHub nullable/type metadata
 不能在未經使用者 review 的情況下直接視為最終 business contract。
 

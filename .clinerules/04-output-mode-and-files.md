@@ -13,12 +13,15 @@
 ```text
 validation/
   field_specs/
-    <table_name>.field_spec.json
+    <version>_<table_name>_field_spec.json
   suites/
     <table_name>_validation_suite.json
   mock_data/
     <table_name>_mock.csv
 ```
+
+Workspace mode 寫入 field spec 時，如果目標版本檔名已存在，自動將 `version`
+加 1，並使用新的 `<version>_<table_name>_field_spec.json` 檔名寫入。
 
 `chat mode` 回傳 artifact 時，必須標示建議檔名，並使用 fenced code block：
 

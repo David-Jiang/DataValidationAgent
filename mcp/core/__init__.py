@@ -10,7 +10,7 @@ MCP Server 核心邏輯模組
 
 from .datahub_client import DataHubError, fetch_table_schema
 from .mock_data import generate_mock_csv
-from .models import parse_field_spec, FieldSpec, FieldSpecField, DType, TableLevelChecks
+from .models import parse_field_spec, FieldSpec, FieldSpecField, DType
 from .validation_suite import build_expectation_suite
 
 __all__ = [
@@ -21,6 +21,5 @@ __all__ = [
     "FieldSpec",
     "FieldSpecField",
     "DType",
-    "TableLevelChecks",
     "build_expectation_suite",
 ]

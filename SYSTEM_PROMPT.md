@@ -46,6 +46,17 @@ DataHub dataset URN，不能自行猜測或繼續草擬。
 - `confidence`
 - `source`
 
+`field_spec` 使用 dtype-specific schema。每個 field 只能包含該 `dtype` 支援的屬性：
+
+- `string`：必須包含 `allow_empty_string`、`enum_values`、`pattern`
+- `int` / `float`：必須包含 `min_value`、`max_value`
+- `datetime`：必須包含 `datetime_after`、`datetime_before`、`expected_datetime_format`
+- `boolean`：不包含型別專屬屬性
+
+不適用於該 `dtype` 的屬性不可出現在 field 中，即使值是 `null` 也不可加入。
+`invalid_value_tokens` 預設建議為 `["NULL", "null", "NA", "None", "none"]`，
+但可依欄位語意與使用者確認後調整。
+
 區分 upstream schema fact 與 business expectation。DataHub nullable/type metadata
 不能在未經使用者 review 的情況下直接視為最終 business contract。
 
@@ -79,12 +90,15 @@ DataHub dataset URN，不能自行猜測或繼續草擬。
 ```text
 validation/
   field_specs/
-    <table_name>.field_spec.json
+    <version>_<table_name>_field_spec.json
   suites/
     <table_name>_validation_suite.json
   mock_data/
     <table_name>_mock.csv
 ```
+
+Workspace mode 寫入 field spec 時，如果目標版本檔名已存在，自動將 `version`
+加 1，並使用新的 `<version>_<table_name>_field_spec.json` 檔名寫入。
 
 `chat mode` 回傳 artifact 時，必須標示建議檔名，並使用 fenced code block：
 

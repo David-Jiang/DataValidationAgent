@@ -1,13 +1,11 @@
 """
 依照 field_spec 產生 production-like mock data。
-策略:優先依 semantic_tag 用對應的 Faker provider 生成更貼近真實樣貌的值;
-沒有對應 semantic_tag 處理器時,退回依 dtype 生成通用假值。
+策略:優先依 enum_values 生成允許值;沒有 enum 時,依 dtype 生成通用假值。
 """
 from __future__ import annotations
 
 import io
 import random
-import string
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -17,18 +15,6 @@ from faker import Faker
 from .models import FieldSpec, FieldSpecField, DType
 
 fake = Faker()
-
-# semantic_tag -> 生成函式對照表。函式簽名一致,方便擴充。
-_SEMANTIC_GENERATORS = {
-    "uuid": lambda f: str(uuid.uuid4()),
-    "email": lambda f: fake.email(),
-    "phone": lambda f: fake.phone_number(),
-    "currency": lambda f: round(random.uniform(f.min_value or 0, f.max_value or 10000), 2),
-    "timestamp": lambda f: _random_datetime(f),
-    "free_text": lambda f: fake.sentence(),
-    "enum": lambda f: random.choice(f.enum_values) if f.enum_values else fake.word(),
-    "name": lambda f: fake.name(),
-}
 
 
 def _random_datetime(f: FieldSpecField) -> str:
@@ -59,10 +45,6 @@ def _generate_value(f: FieldSpecField) -> Any:
     if f.enum_values:
         return random.choice(f.enum_values)
 
-    if f.semantic_tag and f.semantic_tag in _SEMANTIC_GENERATORS:
-        return _SEMANTIC_GENERATORS[f.semantic_tag](f)
-
-    # 退回依 dtype 生成通用值
     if f.dtype == DType.string:
         val = fake.word()
         if f.allow_empty_string is False and val == "":

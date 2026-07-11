@@ -3,7 +3,6 @@
 """
 from __future__ import annotations
 
-import json
 from great_expectations.expectations.expectation_configuration import ExpectationConfiguration
 from great_expectations.core import ExpectationSuite
 
@@ -14,14 +13,12 @@ def build_expectation_suite(table_name: str, field_spec: FieldSpec) -> dict:
     suite = ExpectationSuite()
     suite.expectation_suite_name = f"{table_name}_validation_suite"
 
-    tlc = field_spec.table_level_checks
-    if tlc and (tlc.min_row_count is not None or tlc.max_row_count is not None):
-        suite.add_expectation(
-            ExpectationConfiguration(
-                expectation_type="expect_table_row_count_to_be_between",
-                kwargs={"min_value": tlc.min_row_count, "max_value": tlc.max_row_count},
-            )
+    suite.add_expectation(
+        ExpectationConfiguration(
+            expectation_type="expect_table_columns_to_match_set",
+            kwargs={"column_set": [f.name for f in field_spec.fields], "exact_match": False},
         )
+    )
 
     for f in field_spec.fields:
         col = f.name
