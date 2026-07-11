@@ -23,7 +23,6 @@ _SEMANTIC_GENERATORS = {
     "uuid": lambda f: str(uuid.uuid4()),
     "email": lambda f: fake.email(),
     "phone": lambda f: fake.phone_number(),
-    "phone_tw": lambda f: "09" + "".join(random.choices(string.digits, k=8)),
     "currency": lambda f: round(random.uniform(f.min_value or 0, f.max_value or 10000), 2),
     "timestamp": lambda f: _random_datetime(f),
     "free_text": lambda f: fake.sentence(),
