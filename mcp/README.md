@@ -1,0 +1,124 @@
+# Data Validation Agent — MCP Server
+
+提供四個 MCP 工具,讓 Claude Code 能夠與 DataHub 及 Great Expectations 互動,
+協助工程師在上游 schema 尚未 ready 時,同步進行 ETL 開發與測試。
+
+---
+
+## 專案結構
+
+```
+mcp_server/
+├── server.py                     # MCP Server 入口,定義四個工具
+├── models.py                     # field_spec Pydantic 驗證模型
+├── mock_data.py                  # 依 field_spec 產生 mock data (CSV)
+├── validation_suite.py           # 依 field_spec 產生 GE Validation Suite (JSON)
+├── datahub_client.py             # DataHub GraphQL API client
+├── schemas/
+│   └── field_spec.schema.json   # field_spec 格式的正式 JSON Schema 定義
+├── requirements.txt
+├── Dockerfile
+├── .dockerignore
+├── .env.example                  # 環境變數範本(可進 git)
+├── .env                          # 實際環境變數(已加入 .gitignore,勿進 git)
+└── redeploy.sh                   # 一鍵重新 build & 啟動 container
+```
+
+---
+
+## 四個工具說明
+
+| 工具 | 職責 |
+|---|---|
+| `get_table_schema` | 呼叫 DataHub API,取得上游 table 的原始 schema |
+| `get_field_spec` | 回傳 field_spec 的正式 JSON Schema 定義,供討論時作為格式依據 |
+| `gen_mock_data` | 依確認後的 field_spec 產生 production-like mock data,回傳 CSV 字串 |
+| `gen_validation_suite` | 依確認後的 field_spec 產生 GE Expectation Suite,回傳 JSON 字串 |
+
+本 Server 完全 **stateless**,不持有任何討論狀態。
+field_spec 草稿的存取由 client 端(Claude Code 本機檔案操作)負責。
+
+---
+
+## 環境設定
+
+**第一步:建立 `.env`**
+
+```bash
+cp .env.example .env
+```
+
+**第二步:填入正確的值**
+
+```bash
+# .env
+DATAHUB_GMS_URL=https://your-datahub-gms-host
+DATAHUB_TOKEN=your-token-here
+```
+
+> `.env` 已加入 `.gitignore` 與 `.dockerignore`,不會被 git 追蹤或打進 Docker image。
+> `.env.example` 是公開的範本檔案,可以安全進 git。
+
+---
+
+## Build & Deploy(本機 Docker)
+
+確認 `.env` 填好後,執行:
+
+```bash
+chmod +x redeploy.sh   # 第一次使用前給予執行權限
+./redeploy.sh
+```
+
+`redeploy.sh` 會依序執行以下步驟:
+1. 載入 `.env` 環境變數並驗證必填項目
+2. 停止並移除舊的 container(若存在)
+3. 重新 build Docker image
+4. 以新 image 啟動 container
+
+啟動後 MCP Server 運行於:`http://localhost:8000/mcp`
+
+**每次修改 server 程式碼後,重新執行 `./redeploy.sh` 即可完成重新部署。**
+
+---
+
+## 讓 Claude Code 接上 MCP Server
+
+在你的 repo 根目錄建立(或修改)`.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "data-validation-agent": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+`.mcp.json` 不含任何 token,可以安全進 git。
+之後推廣給其他人時,把 `localhost` 換成公司內部的 host,其他設定完全不變。
+
+---
+
+## 常用指令
+
+```bash
+# 查看 server log(即時)
+docker logs -f data-validation-agent-mcp
+
+# 停止 server
+docker stop data-validation-agent-mcp
+
+# 確認 container 狀態
+docker ps | grep data-validation-agent-mcp
+```
+
+---
+
+## 注意事項
+
+- `DATAHUB_TOKEN` 請勿寫死進任何 git 追蹤的檔案,務必透過 `.env` 注入。
+- `gen_mock_data` 只回傳 CSV 內容字串,不會直接寫入任何資料庫,由使用者自行決定如何匯入。
+- `gen_validation_suite` 依賴的 `great_expectations` 套件版本,需與 Airflow repo 中實際執行驗證的版本保持一致,避免 Expectation Suite 格式不相容。
+- 修改 `schemas/field_spec.schema.json` 後,記得同步更新 `models.py` 裡的 Pydantic 模型,兩者目前是手動保持同步。
