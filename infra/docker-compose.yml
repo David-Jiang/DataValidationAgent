@@ -1,4 +1,4 @@
-name: dva
+name: dva-infra
 
 services:
   clickhouse:
