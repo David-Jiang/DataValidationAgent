@@ -13,23 +13,18 @@ field_spec 草稿的存取由 client 端 (Claude Code) 自行管理。
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-
 from mcp.server.fastmcp import FastMCP
 
-from datahub_client import DataHubError, fetch_table_schema
-from mock_data import generate_mock_csv
-from models import parse_field_spec
-from validation_suite import build_expectation_suite
+from core import DataHubError, fetch_table_schema, generate_mock_csv, parse_field_spec, build_expectation_suite
+
+_SCHEMA_PATH = Path(__file__).parent / "core" / "schemas" / "field_spec.schema.json"
 
 mcp = FastMCP(
     "data-validation-agent",
-    host=0.0.0.0,
+    host="0.0.0.0",
     port=8000,
 )
-
-_SCHEMA_PATH = Path(__file__).parent / "schemas" / "field_spec.schema.json"
 
 
 @mcp.tool()
@@ -56,7 +51,7 @@ def get_field_spec() -> str:
     try:
         return _SCHEMA_PATH.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return "ERROR: field_spec schema 檔案未找到,請確認 Server 部署是否正確包含 schemas/field_spec.schema.json"
+        return "ERROR: field_spec schema 檔案未找到,請確認 Server 部署是否正確包含 core/schemas/field_spec.schema.json"
 
 
 @mcp.tool()

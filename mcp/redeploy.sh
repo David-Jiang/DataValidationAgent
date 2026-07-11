@@ -26,6 +26,7 @@ fi
 docker stop "$CONTAINER_NAME" 2>/dev/null || true
 docker rm   "$CONTAINER_NAME" 2>/dev/null || true
 
+docker rmi "${IMAGE_NAME}:latest" 2>/dev/null || true
 docker build -t "${IMAGE_NAME}:latest" .
 
 docker run -d \

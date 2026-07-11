@@ -10,12 +10,14 @@
 ```
 mcp/
 ├── server.py                     # MCP Server 入口,定義四個工具
-├── models.py                     # field_spec Pydantic 驗證模型
-├── mock_data.py                  # 依 field_spec 產生 mock data (CSV)
-├── validation_suite.py           # 依 field_spec 產生 GE Validation Suite (JSON)
-├── datahub_client.py             # DataHub GraphQL API client
-├── schemas/
-│   └── field_spec.schema.json   # field_spec 格式的正式 JSON Schema 定義
+├── core/                         # 核心邏輯模組
+│   ├── __init__.py               # 導出主要函式
+│   ├── models.py                 # field_spec Pydantic 驗證模型
+│   ├── mock_data.py              # 依 field_spec 產生 mock data (CSV)
+│   ├── validation_suite.py       # 依 field_spec 產生 GE Validation Suite (JSON)
+│   ├── datahub_client.py         # DataHub GraphQL API client
+│   └── schemas/
+│       └── field_spec.schema.json # field_spec 格式的正式 JSON Schema 定義
 ├── requirements.txt
 ├── Dockerfile
 ├── .env.example                  # 環境變數範本
@@ -69,22 +71,6 @@ chmod +x redeploy.sh   # 第一次使用前給予執行權限
 
 ---
 
-## 讓 Claude Code 接上 MCP Server
-
-在你的 repo 根目錄建立(或修改)`.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "data-validation-agent": {
-      "url": "http://localhost:{port}/mcp"
-    }
-  }
-}
-```
-
----
-
 ## 常用指令
 
 ```bash
@@ -104,4 +90,4 @@ docker ps | grep dva-mcp
 
 - `gen_mock_data` 只回傳 CSV 內容字串,不會直接寫入任何資料庫,由使用者自行決定如何匯入。
 - `gen_validation_suite` 依賴的 `great_expectations` 套件版本,需與 Airflow repo 中實際執行驗證的版本保持一致,避免 Expectation Suite 格式不相容。
-- 修改 `schemas/field_spec.schema.json` 後,記得同步更新 `models.py` 裡的 Pydantic 模型,兩者目前是手動保持同步。
+- 修改 `core/schemas/field_spec.schema.json` 後,記得同步更新 `core/models.py` 裡的 Pydantic 模型,兩者目前是手動保持同步。

@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import json
+from great_expectations.expectations.expectation_configuration import ExpectationConfiguration
+from great_expectations.core import ExpectationSuite
 
-from great_expectations.core import ExpectationConfiguration, ExpectationSuite
-
-from models import FieldSpec
+from .models import FieldSpec
 
 
 def build_expectation_suite(table_name: str, field_spec: FieldSpec) -> dict:

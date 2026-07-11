@@ -11,11 +11,10 @@ import string
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-
 import pandas as pd
 from faker import Faker
 
-from models import FieldSpec, FieldSpecField, DType
+from .models import FieldSpec, FieldSpecField, DType
 
 fake = Faker()
 

@@ -9,8 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY models.py mock_data.py validation_suite.py datahub_client.py server.py ./
-COPY schemas/ ./schemas/
+COPY core/ ./core/
+COPY server.py .
 
 EXPOSE 8000
 
