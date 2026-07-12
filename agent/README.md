@@ -33,14 +33,14 @@ agent/
 
 ## 元件責任
 
-| 元件                           | 責任                                                               | 不負責                                  |
-| ------------------------------ | ------------------------------------------------------------------ | --------------------------------------- |
-| `SYSTEM_PROMPT.md`             | 定義 agent 角色、必要 phase 順序、confirmation gate 與全域錯誤政策 | 欄位規則細節或 artifact 寫入步驟        |
-| `validation-dataset-intake`    | 識別 dataset URN、取得並解讀 upstream schema                       | 推測缺少的 URN 或決定 business contract |
-| `validation-field-spec`        | 載入權威 contract、草擬或修改 `field_spec`、釐清規則               | 確認 spec 或產生 artifact               |
+| 元件                           | 責任                                                               | 不負責                                    |
+| ------------------------------ | ------------------------------------------------------------------ | ----------------------------------------- |
+| `SYSTEM_PROMPT.md`             | 定義 agent 角色、必要 phase 順序、confirmation gate 與全域錯誤政策 | 欄位規則細節或 artifact 寫入步驟          |
+| `validation-dataset-intake`    | 識別 dataset URN、取得並解讀 upstream schema                       | 推測缺少的 URN 或決定 business contract   |
+| `validation-field-spec`        | 載入權威 contract、草擬或修改 `field_spec`、釐清規則               | 確認 spec 或產生 artifact                 |
 | `validation-confirmation-gate` | 以完整可讀表格呈現 exact spec 並取得使用者明確確認                 | 顯示 JSON、只給摘要，或將一般討論視為確認 |
-| `validation-artifact-delivery` | 依 confirmed spec 產生、儲存或回傳 artifacts                       | 修改 confirmed spec 或寫入 database     |
-| MCP Server                     | 執行 DataHub 查詢、contract 讀取和 artifact 生成                   | 保存對話狀態或強制完整 workflow         |
+| `validation-artifact-delivery` | 依 confirmed spec 產生、儲存或回傳 artifacts                       | 修改 confirmed spec 或寫入 database       |
+| MCP Server                     | 執行 DataHub 查詢、contract 讀取和 artifact 生成                   | 保存對話狀態或強制完整 workflow           |
 
 ## Skill 與 MCP Tool 對應
 
@@ -126,18 +126,39 @@ validation/
 tools 與輕量 usage instructions，無法保證 workflow 順序、confirmation gate 或 Skill
 行為。
 
-## Smoke Test
+### Cline 專用部署步驟
 
-部署後至少驗證以下情境：
+Cline 以 **Rules** 承載常駐 system prompt，以 **Skills** 承載按需載入的 phase 指示。
+本 repo 採用 **copy 獨立部署**：canonical 來源仍是 `agent/`，Cline 實際讀取的是專案根
+目錄下的 `.clinerules/` 與 `.cline/skills/`。
 
-1. 未提供 dataset URN：Agent 應要求使用者提供，不可自行推測。
-2. 提供有效 URN：Agent 應先呼叫 `get_table_schema`，成功後才進入 field-spec phase。
-3. 草擬 spec：Agent 應先呼叫 `get_field_spec`，並依回傳 contract 建立 JSON。
-4. 尚未確認：要求產生 suite 時，Agent 應拒絕並先以完整表格呈現 final spec 取得明確確認。
-5. 確認後修改規則：Agent 應使原確認失效並重新執行 confirmation gate。
-6. MCP 回傳 `ERROR:`：Agent 應停止，不可繼續草擬、修改或產生 artifact。
-7. 完成交付：Agent 應列出呼叫過的 tools、實際交付的 artifacts，以及仍存在的
-   low-confidence field rules。
+#### 對應關係
+
+| Agent bundle             | Cline 機制                        | 部署位置                               |
+| ------------------------ | --------------------------------- | -------------------------------------- |
+| `SYSTEM_PROMPT.md`       | Rules（常駐注入）                 | `.clinerules/data-validation-agent.md` |
+| `skills/<name>/SKILL.md` | Skills（匹配後 `use_skill` 載入） | `.cline/skills/<name>/SKILL.md`        |
+| MCP tools                | MCP Server 連線                   | Cline MCP settings                     |
+
+#### 部署指令
+
+```bash
+mkdir -p .clinerules .cline/skills
+cp agent/SYSTEM_PROMPT.md .clinerules/data-validation-agent.md
+cp -R agent/skills/validation-* .cline/skills/
+```
+
+部署後結構應為：
+
+```text
+.clinerules/
+└── data-validation-agent.md
+.cline/skills/
+├── validation-dataset-intake/SKILL.md
+├── validation-field-spec/SKILL.md
+├── validation-confirmation-gate/SKILL.md
+└── validation-artifact-delivery/SKILL.md
+```
 
 ## 維護規則
 
