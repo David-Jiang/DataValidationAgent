@@ -1,7 +1,7 @@
 # Data Validation Agent — MCP Server
 
-提供四個 MCP 工具,讓 Claude Code 能夠與 DataHub 及 Great Expectations 互動,
-協助工程師在上游 schema 尚未 ready 時,同步進行 ETL 開發與測試。
+提供四個 MCP tools，供共用 Agent Host 依照 Data Validation workflow 與 DataHub、
+Great Expectations 互動。
 
 ---
 
@@ -36,8 +36,9 @@ mcp/
 | `gen_mock_data`        | 依確認後的 field_spec 產生 production-like mock data,回傳 CSV 字串 |
 | `gen_validation_suite` | 依確認後的 field_spec 產生 GE Expectation Suite,回傳 JSON 字串     |
 
-本 Server 完全 **stateless**,不持有任何討論狀態。
-field_spec 草稿的存取由 client 端(Claude Code 本機檔案操作)負責。
+本 Server 完全 **stateless**，不持有任何討論狀態。它在 MCP initialization 只提供輕量
+server usage instructions；這些 instructions 是 client hint，不是 system prompt，也無法
+強制 workflow。
 
 ---
 

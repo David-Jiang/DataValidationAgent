@@ -6,9 +6,6 @@ Data Validation Agent MCP Server
 - get_field_spec       : 回傳 field_spec 的正式 JSON Schema 定義
 - gen_mock_data         : 依 field_spec 產生 mock data (CSV)
 - gen_validation_suite  : 依 field_spec 產生 Great Expectations Validation Suite (JSON)
-
-設計原則:本 Server 完全 stateless,不持有任何討論狀態或版本歷史,
-field_spec 草稿的存取由 client 端 (Claude Code) 自行管理。
 """
 from __future__ import annotations
 
@@ -19,11 +16,17 @@ from mcp.server.fastmcp import FastMCP
 from core import DataHubError, fetch_table_schema, generate_mock_csv, parse_field_spec, build_expectation_suite
 
 _SCHEMA_PATH = Path(__file__).parent / "core" / "schemas" / "field_spec.schema.json"
+_SERVER_INSTRUCTIONS = (
+    "這是 Data Validation Agent 的 MCP server，提供 DataHub schema、field_spec schema、"
+    "mock data 與 Great Expectations suite 生成工具。完整 validation workflow 由連線的 "
+    "Agent Host 管理；請依該 Agent Host 的指示使用本 server。"
+)
 
 mcp = FastMCP(
     "data-validation-agent",
     host="0.0.0.0",
     port=8000,
+    instructions=_SERVER_INSTRUCTIONS,
 )
 
 
