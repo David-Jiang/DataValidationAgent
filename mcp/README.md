@@ -18,10 +18,10 @@ mcp/
 │   ├── datahub_client.py         # DataHub GraphQL API client
 │   └── schemas/
 │       └── field_spec.schema.json # field_spec 格式的正式 JSON Schema 定義
+├── requirements.txt.             # Libraries
 ├── tests/                        # 單元測試
-├── requirements.txt
-├── requirements-dev.txt          # pytest 與 coverage 測試依賴
-├── pytest.ini                    # pytest 與最低 coverage 設定
+├── requirements-dev.txt          # pytest Libraries
+├── pytest.ini                    # pytest 設定
 ├── Dockerfile
 ├── .env.example                  # 環境變數範本
 ├── .env                          # 實際環境變數
