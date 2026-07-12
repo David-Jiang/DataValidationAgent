@@ -67,10 +67,10 @@ def fetch_table_schema(dataset_urn: str) -> dict:
     if not dataset:
         raise DataHubError(f"找不到 dataset: {dataset_urn},請確認 URN 是否正確")
 
-    fields = dataset.get("schemaMetadata", {}).get("fields", []) or []
+    fields = (dataset.get("schemaMetadata") or {}).get("fields", []) or []
     return {
         "table": dataset.get("name"),
-        "description": dataset.get("properties", {}).get("description"),
+        "description": (dataset.get("properties") or {}).get("description"),
         "fields": [
             {
                 "name": f["fieldPath"],

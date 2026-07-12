@@ -20,6 +20,8 @@ mcp/
 │       └── field_spec.schema.json # field_spec 格式的正式 JSON Schema 定義
 ├── tests/                        # 單元測試
 ├── requirements.txt
+├── requirements-dev.txt          # pytest 與 coverage 測試依賴
+├── pytest.ini                    # pytest 與最低 coverage 設定
 ├── Dockerfile
 ├── .env.example                  # 環境變數範本
 ├── .env                          # 實際環境變數
@@ -73,10 +75,11 @@ chmod +x redeploy.sh   # 第一次使用前給予執行權限
 
 ## Test
 
-安裝 `requirements.txt` 後，在 repository root 執行：
+測試依賴不會安裝進 production image。在 `mcp/` 目錄執行：
 
 ```bash
-PYTHONPATH=mcp python -m unittest discover -s mcp/tests -v
+pip install -r requirements-dev.txt
+pytest
 ```
 
 ---

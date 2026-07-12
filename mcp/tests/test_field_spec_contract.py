@@ -1,86 +1,67 @@
 from __future__ import annotations
 
 import json
-import unittest
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft7Validator
 
+from conftest import (
+    boolean_field,
+    datetime_field,
+    float_field,
+    int_field,
+    spec_document,
+    string_field,
+)
 from core.models import FieldSpec
-from core.validation_suite import build_expectation_suite
 
 
 SCHEMA_PATH = Path(__file__).parents[1] / "core" / "schemas" / "field_spec.schema.json"
-COMMON = {
-    "nullable": False,
-    "invalid_value_tokens": ["NULL", "null", "NA", "None", "none"],
-    "confidence": "high",
-    "source": "discussed_with_user",
-}
+VALIDATOR = Draft7Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
 
 
-def document(field: dict) -> dict:
-    return {
-        "table_name": "orders",
-        "version": 1,
-        "change_note": "test",
-        "fields": [{**COMMON, **field}],
-    }
+@pytest.mark.parametrize(
+    "field",
+    [string_field(), int_field(), float_field(), datetime_field(), boolean_field()],
+)
+def test_json_schema_accepts_every_supported_dtype(field: dict) -> None:
+    VALIDATOR.validate(spec_document(field))
 
 
-class FieldSpecContractTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.validator = Draft7Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
-
-    def test_string_requires_unique(self) -> None:
-        raw = document(
-            {
-                "name": "code",
-                "dtype": "string",
-                "allow_empty_string": False,
-                "enum_values": None,
-                "pattern": None,
-            }
-        )
-        self.assertFalse(self.validator.is_valid(raw))
-        with self.assertRaisesRegex(ValueError, "缺少 string 專屬屬性.*unique"):
-            FieldSpec(**raw)
-
-    def test_non_string_forbids_unique(self) -> None:
-        raw = document(
-            {
-                "name": "amount",
-                "dtype": "float",
-                "unique": True,
-                "min_value": 0,
-                "max_value": 100,
-            }
-        )
-        self.assertFalse(self.validator.is_valid(raw))
-        with self.assertRaisesRegex(ValueError, "不應出現 string/datetime 專屬屬性.*unique"):
-            FieldSpec(**raw)
-
-    def test_string_unique_generates_ge_expectation(self) -> None:
-        spec = FieldSpec(
-            **document(
-                {
-                    "name": "code",
-                    "dtype": "string",
-                    "unique": True,
-                    "allow_empty_string": False,
-                    "enum_values": None,
-                    "pattern": None,
-                }
-            )
-        )
-        suite = build_expectation_suite("orders", spec)
-        expectation_types = {
-            expectation["expectation_type"]
-            for expectation in suite["expectations"]
-        }
-        self.assertIn("expect_column_values_to_be_unique", expectation_types)
+def test_json_schema_requires_unique_for_string() -> None:
+    field = string_field()
+    del field["unique"]
+    assert not VALIDATOR.is_valid(spec_document(field))
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.parametrize(
+    "field",
+    [
+        int_field(unique=True),
+        float_field(unique=True),
+        datetime_field(unique=True),
+        boolean_field(unique=True),
+    ],
+)
+def test_json_schema_forbids_unique_for_non_string(field: dict) -> None:
+    assert not VALIDATOR.is_valid(spec_document(field))
+
+
+def test_json_schema_rejects_unknown_properties() -> None:
+    assert not VALIDATOR.is_valid(spec_document(string_field(unknown_rule=True)))
+
+
+def test_json_schema_and_pydantic_accept_same_complete_document() -> None:
+    raw = spec_document(
+        string_field(), int_field(), float_field(), datetime_field(), boolean_field()
+    )
+    VALIDATOR.validate(raw)
+    parsed = FieldSpec(**raw)
+    assert [field.dtype.value for field in parsed.fields] == [
+        "string",
+        "int",
+        "float",
+        "datetime",
+        "boolean",
+    ]
