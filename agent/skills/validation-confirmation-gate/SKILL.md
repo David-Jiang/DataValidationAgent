@@ -5,8 +5,8 @@ description: 與使用者 review 完整 field_spec，並在產生 validation art
 
 # Field Spec 確認 Gate
 
-1. 將完整 final `field_spec` 整理成人類可讀的 Markdown tables；不可要求使用者閱讀 JSON，
-   也不可只提供摘要或省略任何 property：
+1. **必須**將完整 final `field_spec` 整理成人類可讀的 Markdown tables；**禁止**要求使用者
+   閱讀 JSON，也**禁止**只提供摘要、欄位名稱清單或省略任何 property：
    - 先顯示 spec metadata table：`table_name`、`version`、`change_note`。
    - 顯示 common rules table，每個 field 一列：`name`、`dtype`、`nullable`、
      `invalid_value_tokens`、`confidence`、`source`。
@@ -15,10 +15,11 @@ description: 與使用者 review 完整 field_spec，並在產生 validation art
      `datetime_after`、`datetime_before`、`expected_datetime_format`。boolean 沒有額外規則。
    - `null`、空 array 或未設定值也必須以 `—`、`[]` 等清楚標記呈現，不可省略。
    - 表格後列出所有 medium/low-confidence assumptions 與 residual risk。
-2. 要求使用者明確確認表格所代表的完整 exact spec version。只接受清楚的肯定回覆，例如 `confirm`、
+2. 完整 Markdown tables 尚未顯示前，**不得**要求使用者確認，也**不得**將任何回覆視為有效確認。
+3. 要求使用者明確確認表格所代表的完整 exact spec version。只接受清楚的肯定回覆，例如 `confirm`、
    `confirmed`、`looks good`、`可以`、`確認` 或 `沒問題`。
-3. 不可將沉默、部分回應或一般討論視為確認。
-4. 使用者在確認後修改任何規則時，將 spec 標為未確認，回到
+4. 不可將沉默、部分回應或一般討論視為確認。
+5. 使用者在確認後修改任何規則時，必須將 spec 標為未確認，回到
    `validation-field-spec`，然後重新取得確認。
-5. Agent 必須在內部保留與表格完全對應的 canonical JSON。確認後將該 JSON 原樣交給
-   `validation-artifact-delivery`；產生前不可修改或補值。
+6. Agent 必須在內部保留與表格完全對應的 canonical JSON。確認後必須將該 JSON 原樣交給
+   `validation-artifact-delivery`；產生前禁止修改、補值或重新推導。
