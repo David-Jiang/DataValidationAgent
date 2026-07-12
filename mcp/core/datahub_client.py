@@ -49,6 +49,7 @@ def fetch_table_schema(dataset_urn: str) -> dict:
             f"{DATAHUB_HOST}/api/graphql",
             json={"query": _SCHEMA_QUERY, "variables": {"urn": dataset_urn}},
             headers={"Authorization": f"Bearer {DATAHUB_TOKEN}"},
+            timeout=10,
         )
         resp.raise_for_status()
     except httpx.HTTPStatusError as e:

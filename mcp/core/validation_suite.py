@@ -3,15 +3,16 @@
 """
 from __future__ import annotations
 
-from great_expectations.expectations.expectation_configuration import ExpectationConfiguration
+from great_expectations.core.expectation_configuration import ExpectationConfiguration
 from great_expectations.core import ExpectationSuite
 
-from .models import FieldSpec
+from .models import DType, FieldSpec
 
 
 def build_expectation_suite(table_name: str, field_spec: FieldSpec) -> dict:
-    suite = ExpectationSuite()
-    suite.expectation_suite_name = f"{table_name}_validation_suite"
+    suite = ExpectationSuite(
+        expectation_suite_name=f"{table_name}_validation_suite"
+    )
 
     suite.add_expectation(
         ExpectationConfiguration(
@@ -31,7 +32,7 @@ def build_expectation_suite(table_name: str, field_spec: FieldSpec) -> dict:
                 )
             )
 
-        if f.unique:
+        if f.dtype == DType.string and f.unique:
             suite.add_expectation(
                 ExpectationConfiguration(
                     expectation_type="expect_column_values_to_be_unique",

@@ -24,7 +24,7 @@ _SERVER_INSTRUCTIONS = (
 
 mcp = FastMCP(
     "data-validation-agent",
-    host="0.0.0.0",
+    host="127.0.0.1",
     port=8000,
     instructions=_SERVER_INSTRUCTIONS,
 )
@@ -65,7 +65,7 @@ def get_field_spec() -> str:
 def gen_mock_data(field_spec_json: str, row_count: int = 100) -> str:
     """
     根據確認後的 field_spec(JSON 字串,需符合 get_field_spec 回傳的結構)產生 mock data。
-    row_count: 要產生的資料筆數,預設 100。
+    row_count: 要產生的資料筆數，未指定時預設 100；使用者指定時使用其正整數值。
     回傳 CSV 內容字串(不落地寫檔,由使用者決定要不要存檔)。
     失敗時回傳以 ERROR: 開頭的錯誤訊息,說明 field_spec 哪裡不符合規範。
     """

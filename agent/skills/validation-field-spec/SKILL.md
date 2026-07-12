@@ -14,8 +14,9 @@ description: 載入權威 field_spec contract，草擬或修改 field_spec，並
    提供或確認的 business expectation 使用 `source: "discussed_with_user"`。
 5. 未解決的假設標示為 `confidence: "medium"` 或 `"low"`；不可發明 schema 不支援的
    properties 或 values。
-6. 只針對完成 contract 所缺少的語意提問：nullable、uniqueness、invalid-value tokens、
-   空字串、enum、pattern、numeric range 與 datetime bounds 或 format。較清楚時採逐欄
+6. 只針對完成 contract 所缺少的語意提問：nullable、string uniqueness、invalid-value tokens、
+   空字串、enum、pattern、numeric range 與 datetime bounds 或 format。`unique` 只適用於
+   string field，不可加入 int、float、datetime 或 boolean field。較清楚時採逐欄
    review。
 7. 確保每個 field 包含 required common properties，且只含 JSON Schema 允許的
    dtype-specific properties。除非使用者確認不同規則，invalid-value tokens 以

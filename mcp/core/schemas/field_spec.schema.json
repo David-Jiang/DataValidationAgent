@@ -69,7 +69,6 @@
         "name",
         "dtype",
         "nullable",
-        "unique",
         "invalid_value_tokens",
         "min_value",
         "max_value",
@@ -81,7 +80,6 @@
         "name": { "type": "string", "minLength": 1 },
         "dtype": { "const": "int" },
         "nullable": { "type": "boolean" },
-        "unique": { "type": "boolean" },
         "invalid_value_tokens": {
           "type": "array",
           "default": ["NULL", "null", "NA", "None", "none"],
@@ -103,7 +101,6 @@
         "name",
         "dtype",
         "nullable",
-        "unique",
         "invalid_value_tokens",
         "min_value",
         "max_value",
@@ -115,7 +112,6 @@
         "name": { "type": "string", "minLength": 1 },
         "dtype": { "const": "float" },
         "nullable": { "type": "boolean" },
-        "unique": { "type": "boolean" },
         "invalid_value_tokens": {
           "type": "array",
           "default": ["NULL", "null", "NA", "None", "none"],
@@ -137,7 +133,6 @@
         "name",
         "dtype",
         "nullable",
-        "unique",
         "invalid_value_tokens",
         "datetime_after",
         "datetime_before",
@@ -150,7 +145,6 @@
         "name": { "type": "string", "minLength": 1 },
         "dtype": { "const": "datetime" },
         "nullable": { "type": "boolean" },
-        "unique": { "type": "boolean" },
         "invalid_value_tokens": {
           "type": "array",
           "default": ["NULL", "null", "NA", "None", "none"],
@@ -173,7 +167,6 @@
         "name",
         "dtype",
         "nullable",
-        "unique",
         "invalid_value_tokens",
         "confidence",
         "source"
@@ -183,7 +176,6 @@
         "name": { "type": "string", "minLength": 1 },
         "dtype": { "const": "boolean" },
         "nullable": { "type": "boolean" },
-        "unique": { "type": "boolean" },
         "invalid_value_tokens": {
           "type": "array",
           "default": ["NULL", "null", "NA", "None", "none"],

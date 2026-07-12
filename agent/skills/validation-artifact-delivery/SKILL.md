@@ -7,8 +7,10 @@ description: 根據已明確確認的 field_spec 產生並交付 mock CSV data �
 
 1. 確認 exact `field_spec` 已被明確確認且未變更；否則回到
    `validation-confirmation-gate`。
-2. 詢問使用者是否需要產生 mock data ，需要時則呼叫 `gen_mock_data(field_spec_json, row_count)`；
-   不用詢問使用者即產生 validation suite ，呼叫 `gen_validation_suite(table_name, field_spec_json)`。
+2. 詢問使用者是否需要產生 mock data；需要且未指定筆數時，直接以預設 `row_count=100`
+   呼叫 `gen_mock_data`，不可再追問筆數。使用者已明確指定正整數筆數時，原樣使用該數量，
+   不另設上限。validation suite 不用詢問即呼叫
+   `gen_validation_suite(table_name, field_spec_json)` 產生。
 3. 任一回應以 `ERROR:` 開頭時，說明錯誤後停止。不可用修改後的 spec 重試，也不可
    生成其他 artifact，直到使用者處理錯誤並重新確認任何修改過的 spec。
 4. 在可寫入 workspace 中，將 artifact 存到使用者選定的 root；未指定時使用：

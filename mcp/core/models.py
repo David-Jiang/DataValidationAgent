@@ -23,7 +23,7 @@ class FieldSpecField(BaseModel):
     name: str
     dtype: DType
     nullable: bool
-    unique: bool
+    unique: Optional[bool] = None
 
     allow_empty_string: Optional[bool] = None
     enum_values: Optional[list[str]] = None
@@ -51,7 +51,7 @@ class FieldSpecField(BaseModel):
     @model_validator(mode="after")
     def check_type_specific_fields(self) -> "FieldSpecField":
         fields_set = self.model_fields_set
-        string_fields = {"allow_empty_string", "enum_values", "pattern"}
+        string_fields = {"unique", "allow_empty_string", "enum_values", "pattern"}
         numeric_fields = {"min_value", "max_value"}
         datetime_fields = {"datetime_after", "datetime_before", "expected_datetime_format"}
 
