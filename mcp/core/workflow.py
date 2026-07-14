@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import threading
-import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 from .models import FieldSpec
+
+_WORKFLOW_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
+_WORKFLOW_ID_SPACE = len(_WORKFLOW_ID_ALPHABET) ** 4
+_REQUIRED_ARTIFACTS = ("validation_suite", "mock_data", "field_spec")
 
 
 class WorkflowError(ValueError):
@@ -34,6 +38,19 @@ def _now() -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _workflow_date() -> str:
+    """使用 UTC 日期，避免 Server 時區不同造成 workflow_id 含義不一致。"""
+    return datetime.now(timezone.utc).strftime("%Y%m%d")
+
+
+def _base36_suffix(value: int) -> str:
+    chars = []
+    for _ in range(4):
+        value, remainder = divmod(value, len(_WORKFLOW_ID_ALPHABET))
+        chars.append(_WORKFLOW_ID_ALPHABET[remainder])
+    return "".join(reversed(chars))
 
 
 def canonical_field_spec(spec: FieldSpec) -> str:
@@ -62,30 +79,29 @@ class WorkflowStore:
         if not dataset_urn:
             raise WorkflowError("dataset_urn 不可為空")
 
-        workflow_id = f"dva_{uuid.uuid4().hex}"
-        now = _now()
-        record: dict[str, Any] = {
-            "workflow_id": workflow_id,
-            "state": WorkflowState.awaiting_schema.value,
-            "dataset_urn": dataset_urn,
-            "created_at": now,
-            "updated_at": now,
-            "upstream_schema": None,
-            "upstream_schema_sha256": None,
-            "field_spec_contract_sha256": None,
-            "field_spec_json": None,
-            "field_spec_sha256": None,
-            "confirmation": None,
-            "generated_artifacts": {
-                "validation_suite": False,
-                "mock_data": False,
-            },
-            "delivered_artifacts": {},
-            "blocked": None,
-            "history": [],
-        }
-        self._append_event(record, "workflow_started")
         with self._lock:
+            workflow_id = self._new_workflow_id()
+            now = _now()
+            record: dict[str, Any] = {
+                "workflow_id": workflow_id,
+                "state": WorkflowState.awaiting_schema.value,
+                "dataset_urn": dataset_urn,
+                "created_at": now,
+                "updated_at": now,
+                "upstream_schema": None,
+                "upstream_schema_sha256": None,
+                "field_spec_contract_sha256": None,
+                "field_spec_json": None,
+                "field_spec_sha256": None,
+                "confirmation": None,
+                "generated_artifacts": {
+                    artifact: False for artifact in _REQUIRED_ARTIFACTS
+                },
+                "delivered_artifacts": {},
+                "blocked": None,
+                "history": [],
+            }
+            self._append_event(record, "workflow_started")
             self._items[workflow_id] = record
         return self.snapshot(workflow_id)
 
@@ -121,6 +137,7 @@ class WorkflowStore:
             WorkflowState.drafting_spec,
             WorkflowState.awaiting_confirmation,
             WorkflowState.confirmed,
+            WorkflowState.generating_artifacts,
         }
         with self._lock:
             record = self._require(workflow_id)
@@ -128,8 +145,7 @@ class WorkflowStore:
             record["field_spec_contract_sha256"] = _sha256_text(contract_text)
             record["confirmation"] = None
             record["generated_artifacts"] = {
-                "validation_suite": False,
-                "mock_data": False,
+                artifact: False for artifact in _REQUIRED_ARTIFACTS
             }
             record["delivered_artifacts"] = {}
             self._transition(record, WorkflowState.drafting_spec, "contract_loaded")
@@ -185,7 +201,7 @@ class WorkflowStore:
         return FieldSpec(**json.loads(raw))
 
     def artifact_generated(self, workflow_id: str, artifact: str) -> dict[str, Any]:
-        if artifact not in {"validation_suite", "mock_data"}:
+        if artifact not in _REQUIRED_ARTIFACTS:
             raise WorkflowError(f"未知的 artifact：{artifact}")
         with self._lock:
             record = self._require(workflow_id)
@@ -208,34 +224,46 @@ class WorkflowStore:
         return {
             "validation_suite": f"{root}/{spec.table_name}_validation_suite.json",
             "mock_data": f"{root}/{spec.table_name}_mock.csv",
+            "field_spec": f"{root}/{spec.table_name}_field_spec.csv",
         }
 
     def complete(
-        self, workflow_id: str, suite_path: str, mock_path: str = ""
+        self,
+        workflow_id: str,
+        suite_path: str,
+        mock_path: str,
+        field_spec_path: str,
     ) -> dict[str, Any]:
         with self._lock:
             record = self._require(workflow_id)
             self._require_state(record, WorkflowState.generating_artifacts)
-            if not record["generated_artifacts"]["validation_suite"]:
-                raise WorkflowError("尚未產生 validation suite")
+            missing = [
+                artifact
+                for artifact in _REQUIRED_ARTIFACTS
+                if not record["generated_artifacts"][artifact]
+            ]
+            if missing:
+                raise WorkflowError(f"尚未產生必要 artifacts：{', '.join(missing)}")
 
         expected = self.expected_artifact_paths(workflow_id)
         if suite_path != expected["validation_suite"]:
             raise WorkflowError(
                 f"suite_path 必須是 {expected['validation_suite']}"
             )
+        if mock_path != expected["mock_data"]:
+            raise WorkflowError(f"mock_path 必須是 {expected['mock_data']}")
+        if field_spec_path != expected["field_spec"]:
+            raise WorkflowError(
+                f"field_spec_path 必須是 {expected['field_spec']}"
+            )
 
         with self._lock:
             record = self._require(workflow_id)
-            mock_generated = record["generated_artifacts"]["mock_data"]
-            if mock_generated and mock_path != expected["mock_data"]:
-                raise WorkflowError(f"mock_path 必須是 {expected['mock_data']}")
-            if not mock_generated and mock_path:
-                raise WorkflowError("尚未產生 mock data，不可登記 mock_path")
-
-            delivered = {"validation_suite": suite_path}
-            if mock_generated:
-                delivered["mock_data"] = mock_path
+            delivered = {
+                "validation_suite": suite_path,
+                "mock_data": mock_path,
+                "field_spec": field_spec_path,
+            }
             record["delivered_artifacts"] = delivered
             self._transition(record, WorkflowState.completed, "workflow_completed")
             return self.snapshot(workflow_id)
@@ -270,6 +298,17 @@ class WorkflowStore:
             return self._items[workflow_id]
         except KeyError as exc:
             raise WorkflowError(f"找不到 workflow_id：{workflow_id}") from exc
+
+    def _new_workflow_id(self) -> str:
+        """建立日期加四碼 suffix，並以完整 suffix 空間探查確保目前 process 內唯一。"""
+        date = _workflow_date()
+        start = secrets.randbelow(_WORKFLOW_ID_SPACE)
+        for offset in range(_WORKFLOW_ID_SPACE):
+            suffix = _base36_suffix((start + offset) % _WORKFLOW_ID_SPACE)
+            workflow_id = f"dva_{date}_{suffix}"
+            if workflow_id not in self._items:
+                return workflow_id
+        raise WorkflowError(f"{date} 的 workflow_id 四碼空間已用盡")
 
     @staticmethod
     def _require_state(

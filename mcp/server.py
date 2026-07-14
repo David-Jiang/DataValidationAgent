@@ -12,6 +12,7 @@ from core import (
     WorkflowState,
     build_expectation_suite,
     fetch_table_schema,
+    generate_field_spec_csv,
     generate_mock_csv,
     parse_field_spec,
     workflow_store,
@@ -22,7 +23,7 @@ _SERVER_INSTRUCTIONS = """
 這是 Data Validation Agent MCP Server。每個 workflow 都必須從 start_validation(dataset_urn)
 開始，並將回傳的 workflow_id 傳給所有後續 tool。請依照以下順序執行：
 get_table_schema -> get_field_spec -> submit_field_spec -> confirm_field_spec ->
-gen_validation_suite -> 選用的 gen_mock_data -> complete_validation。
+gen_validation_suite -> gen_mock_data -> gen_field_spec_csv -> complete_validation。
 Server 會拒絕不符合目前 workflow state 的操作。只有在人類完整檢視 field_spec，並明確回覆
 「確認」等肯定語句後，才能呼叫 confirm_field_spec。Artifact 會以字串回傳，Agent Host 必須
 將其寫入 artifacts/{workflow_id}/；MCP Server 不保存 artifact 檔案。
@@ -175,16 +176,17 @@ def gen_validation_suite(workflow_id: str) -> str:
 
 
 @mcp.tool()
-def gen_mock_data(workflow_id: str, row_count: int = 100) -> str:
+def gen_mock_data(workflow_id: str) -> str:
     """
-    使用 Server 內已確認的 field_spec 產生選用的 CSV mock data。
+    使用 Server 內已確認的 field_spec 產生必要的全反向 CSV mock data。
+    筆數由 Server 控制：基準 100、規則較多時可增加，最多 1000。
     Agent Host 必須將回傳的 CSV 寫入
     artifacts/{workflow_id}/<table_name>_mock.csv.
     """
     try:
         resume_state = _state(workflow_id)
         spec = workflow_store.field_spec(workflow_id)
-        csv_text = generate_mock_csv(spec, row_count=row_count)
+        csv_text = generate_mock_csv(spec)
         workflow_store.artifact_generated(workflow_id, "mock_data")
         return csv_text
     except WorkflowError as exc:
@@ -196,16 +198,46 @@ def gen_mock_data(workflow_id: str, row_count: int = 100) -> str:
 
 
 @mcp.tool()
-def complete_validation(
-    workflow_id: str, suite_path: str, mock_path: str = ""
-) -> str:
+def gen_field_spec_csv(workflow_id: str) -> str:
     """
-    Agent Host 寫入並驗證產生的 artifacts 後，將交付標記為完成。
-    路徑必須符合 artifacts/{workflow_id}/<table_name>_validation_suite.json；若有產生 mock
-    data，還必須符合 artifacts/{workflow_id}/<table_name>_mock.csv。
+    將 Server 內已確認的正式版 field_spec 展開為必要的 CSV artifact。
+    Agent Host 必須將回傳的 CSV 寫入
+    artifacts/{workflow_id}/<table_name>_field_spec.csv。
     """
     try:
-        return _json(workflow_store.complete(workflow_id, suite_path, mock_path))
+        resume_state = _state(workflow_id)
+        spec = workflow_store.field_spec(workflow_id)
+        csv_text = generate_field_spec_csv(spec)
+        workflow_store.artifact_generated(workflow_id, "field_spec")
+        return csv_text
+    except WorkflowError as exc:
+        return f"ERROR: {exc}"
+    except Exception as exc:
+        message = f"產生 field_spec CSV 時發生例外：{exc}"
+        workflow_store.block(workflow_id, message, resume_state)
+        return f"ERROR: {message}"
+
+
+@mcp.tool()
+def complete_validation(
+    workflow_id: str,
+    suite_path: str,
+    mock_path: str,
+    field_spec_path: str,
+) -> str:
+    """
+    Agent Host 寫入並驗證三個必要 artifacts 後，將交付標記為完成。
+    路徑必須分別符合 validation suite JSON、全反向 mock CSV 與 field_spec CSV 的預期路徑。
+    """
+    try:
+        return _json(
+            workflow_store.complete(
+                workflow_id,
+                suite_path,
+                mock_path,
+                field_spec_path,
+            )
+        )
     except WorkflowError as exc:
         return f"ERROR: {exc}"
 

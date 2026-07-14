@@ -9,15 +9,18 @@ MCP Server 以 `workflow_id` 為 key，將所有 state 保存於記憶體內的 
 | `dataset_ready` | `get_field_spec` | `drafting_spec` |
 | `drafting_spec` | `submit_field_spec` | `awaiting_confirmation` |
 | `awaiting_confirmation` | 使用者明確確認，再呼叫 `confirm_field_spec` | `confirmed` |
-| `confirmed` | `gen_validation_suite` 或 `gen_mock_data` | `generating_artifacts` |
-| `generating_artifacts` | 產生剩餘 artifact 或呼叫 `complete_validation` | `completed` |
+| `confirmed` | 任一固定 artifact 產生工具 | `generating_artifacts` |
+| `generating_artifacts` | 產生剩餘 artifacts；三個皆完成後呼叫 `complete_validation` | `completed` |
 | `blocked` | 修正使用者輸入或環境，再呼叫 `resume_validation` | 已記錄的恢復 state |
 | `completed` | 無 | 終止狀態 |
 
-從 `awaiting_confirmation` 或 `confirmed` 呼叫 `get_field_spec` 會開始新的修改循環：清除
-確認紀錄與 artifact 狀態，並將 state 改為 `drafting_spec`。
+從 `awaiting_confirmation`、`confirmed` 或 `generating_artifacts` 呼叫 `get_field_spec` 會開始
+新的修改循環：清除確認紀錄與 artifact 狀態，並將 state 改為 `drafting_spec`。
 
 MCP 作業錯誤會將 workflow 移至 `blocked` 並記錄恢復 state。無效輸入或不合法的
 state transition 會回傳 `ERROR:`，但不推進 state。使用者修正問題後，呼叫
 `get_validation_state`；若 state 為 `blocked`，呼叫 `resume_validation`，否則只重試修正後的
 操作。
+
+固定 artifacts 為 `validation_suite`、`mock_data` 與 `field_spec`。缺少任一項時，
+`complete_validation` 必須拒絕完成 workflow。

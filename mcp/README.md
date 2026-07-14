@@ -1,7 +1,8 @@
 # Data Validation Agent — MCP Server
 
-此 MCP Server 提供 DataHub schema、field-spec 規格、人工確認關卡、Great Expectations suite
-與 mock data 產生能力，並以記憶體內的狀態機強制 workflow 順序。
+此 MCP Server 提供 DataHub schema、field-spec 規格、人工確認關卡、Great Expectations
+suite、全反向 mock data 與 field-spec CSV 產生能力，並以記憶體內的狀態機強制 workflow
+順序。
 
 完整 Agent 流程與狀態機圖請見 [Agent 套件 README](../agent/README.md)。
 
@@ -14,6 +15,7 @@ mcp/
 │   ├── workflow.py
 │   ├── models.py
 │   ├── datahub_client.py
+│   ├── field_spec_csv.py
 │   ├── mock_data.py
 │   ├── validation_suite.py
 │   └── schemas/field_spec.schema.json
@@ -35,12 +37,16 @@ mcp/
 | `submit_field_spec` | 驗證並保存正式版 spec |
 | `confirm_field_spec` | 記錄人工確認與實際 spec hash |
 | `gen_validation_suite` | 只使用 Server 內已確認的 spec 產生 suite |
-| `gen_mock_data` | 只使用 Server 內已確認的 spec 產生 CSV |
+| `gen_mock_data` | 只使用 Server 內已確認的 spec 產生固定的全反向 CSV |
+| `gen_field_spec_csv` | 將 Server 內已確認的正式版 spec 展開為 CSV |
 | `complete_validation` | 記錄 Agent 已寫入並驗證的 workspace 路徑 |
 | `resume_validation` | 修正作業錯誤後恢復 blocked workflow |
 
 Artifact 產生器不再接受任意 `field_spec_json`。只有目前 workflow 中的確認 hash 與正式版
 spec hash 相同時才能執行。
+
+`workflow_id` 格式為 `dva_{YYYYMMDD}_{四碼 base36 suffix}`，日期使用 UTC。隨機選擇起始
+suffix 後，若發生碰撞便依序探查下一個 suffix，確保目前 process 內唯一。
 
 ## 記憶體內儲存
 
@@ -62,10 +68,16 @@ Agent Host 必須將 tool 回傳內容寫到使用者 workspace：
 ```text
 artifacts/{workflow-id}/<table_name>_validation_suite.json
 artifacts/{workflow-id}/<table_name>_mock.csv
+artifacts/{workflow-id}/<table_name>_field_spec.csv
 ```
 
 `complete_validation` 會驗證登記的相對路徑是否符合上述 workflow 專屬路徑，但
 不會存取 Agent Host workspace 或保存檔案。
+
+Field-spec CSV 固定包含：`table_name`、`name`、`dtype`、`nullable`、`unique`、
+`allow_empty_string`、`enum_values`、`pattern`、`min_value`、`max_value`、
+`datetime_after`、`datetime_before`、`expected_datetime_format`、
+`invalid_value_tokens`、`confidence` 與 `source`。每個資料欄位各占一列。
 
 ## 環境設定
 
@@ -102,7 +114,10 @@ pytest
 
 ## 注意事項
 
-- `gen_mock_data` 預設 100 筆；使用者指定正整數時依指定數量產生。
+- `gen_mock_data` 不接受筆數參數。基準為 100 筆；規則案例超過 100 時擴充至足以覆蓋全部
+  案例，最多 1000 筆，超出的案例直接截斷且不報錯。
+- Mock data 每列至少注入一條規則違規，固定作為 ETL 與 validation suite 的反向測試資料。
+- Validation suite JSON、mock CSV 與 field-spec CSV 都是必要 artifacts。
 - `unique` 只適用於 string field。
 - Mock data 不會寫入資料庫。
 - 本專案固定使用 Great Expectations 1.18.2。

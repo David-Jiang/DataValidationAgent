@@ -32,8 +32,10 @@ agent/skills/data-validation/
 
 ## 狀態機
 
-每次呼叫 `start_validation(dataset_urn)` 都會建立新的 `workflow_id`。後續所有 MCP tools
-必須使用同一個 ID；Server 會拒絕不符合目前 state 的操作。
+每次呼叫 `start_validation(dataset_urn)` 都會建立新的 `workflow_id`，格式為
+`dva_{YYYYMMDD}_{四碼亂數}`，日期使用 UTC。Server 會在目前 process 內遇到碰撞時探查下一個
+四碼 suffix，確保 ID 唯一。後續所有 MCP tools 必須使用同一個 ID；Server 會拒絕不符合
+目前 state 的操作。
 
 ```mermaid
 stateDiagram-v2
@@ -49,7 +51,7 @@ stateDiagram-v2
     AwaitingConfirmation --> DraftingSpec: get_field_spec 使已提交 spec 失效
     Confirmed --> DraftingSpec: get_field_spec 使確認失效
 
-    Confirmed --> GeneratingArtifacts: gen_validation_suite 或 gen_mock_data
+    Confirmed --> GeneratingArtifacts: 任一固定 artifact 產生工具
     GeneratingArtifacts --> GeneratingArtifacts: 產生其餘 artifact
     GeneratingArtifacts --> Completed: Agent 寫入檔案後呼叫 complete_validation
     GeneratingArtifacts --> Blocked: 產生器或執行環境錯誤
@@ -72,11 +74,12 @@ stateDiagram-v2
 | `drafting_spec` | 已載入最新 field-spec contract | `submit_field_spec` |
 | `awaiting_confirmation` | 正式版 field spec 已驗證並保存 | 人工審閱、`confirm_field_spec` |
 | `confirmed` | confirmation hash 等於目前 spec hash | artifact generators |
-| `generating_artifacts` | 至少一個產生器已成功 | 其餘產生器、`complete_validation` |
+| `generating_artifacts` | 至少一個產生器已成功 | 產生其餘固定 artifacts；三個完成後執行 `complete_validation` |
 | `blocked` | 保存錯誤與原本的恢復 state | 修正後執行 `resume_validation` |
-| `completed` | 必要的 suite 已寫入並由 Agent 驗證 | 終止狀態 |
+| `completed` | 三個固定 artifacts 已寫入並由 Agent 驗證 | 終止狀態 |
 
-任何已提交或已確認的 spec 只要重新進入 `get_field_spec`，既有確認、產生與交付狀態都會失效。
+任何已提交、已確認或正在產生 artifacts 的 spec 只要重新進入 `get_field_spec`，既有確認、
+產生與交付狀態都會失效。
 
 ## 人工確認關卡
 
@@ -104,8 +107,9 @@ POC 的 MCP Server 能強制 state transition 與已確認 spec 的 hash，但�
 | 4 | `submit_field_spec(workflow_id, field_spec_json)` | `drafting_spec → awaiting_confirmation` |
 | 5 | `confirm_field_spec(workflow_id)` | `awaiting_confirmation → confirmed` |
 | 6 | `gen_validation_suite(workflow_id)` | `confirmed → generating_artifacts` |
-| 7 | `gen_mock_data(workflow_id, row_count)` | 選用；維持 `generating_artifacts` |
-| 8 | `complete_validation(workflow_id, suite_path, mock_path)` | `generating_artifacts → completed` |
+| 7 | `gen_mock_data(workflow_id)` | 維持 `generating_artifacts` |
+| 8 | `gen_field_spec_csv(workflow_id)` | 維持 `generating_artifacts` |
+| 9 | `complete_validation(workflow_id, suite_path, mock_path, field_spec_path)` | `generating_artifacts → completed` |
 
 `get_validation_state` 可讀取狀態；`resume_validation` 只用於修正作業錯誤後恢復
 `blocked` workflow。
@@ -117,10 +121,14 @@ Artifact 只寫入使用者 workspace：
 ```text
 artifacts/{workflow-id}/<table_name>_validation_suite.json
 artifacts/{workflow-id}/<table_name>_mock.csv
+artifacts/{workflow-id}/<table_name>_field_spec.csv
 ```
 
-Validation suite 為必要產物；mock CSV 只有在使用者需要時產生。不再使用 field-spec 版本、
-異動說明或另外交付正式版 field-spec 檔案。
+三個檔案都是必要產物，不詢問使用者是否需要 mock data，也不開放指定筆數。Mock CSV 只包含
+反向資料，每列至少違反一條規則；基準為 100 筆，為覆蓋全部可產生的條件可增加至最多
+1000 筆。超過上限的案例會截斷，不阻擋 artifact 交付。
+
+Field-spec CSV 將全部屬性展開為 columns，每個資料欄位各占一 row，方便使用者後續比對。
 
 Agent 必須讀回驗證寫入內容，再以 workspace-relative path 呼叫 `complete_validation`。MCP
 Server 只記錄 path 與 delivery status。
