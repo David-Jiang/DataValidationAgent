@@ -1,6 +1,6 @@
 ---
 name: data-validation
-description: 統籌完整的 DataHub 資料表驗證流程，包含上游結構擷取、欄位規格定義、人工確認，以及 Great Expectations 或模擬資料產物交付。當使用者呼叫 /data-validation、提供 DataHub dataset URN，或要求 data validate、資料驗證、資料表驗證、定義欄位驗證規則、建立模擬資料、產生 Great Expectations validation suite 時使用。若需求相關但沒有 dataset URN，要求使用者提供。
+description: 統籌完整的 DataHub 資料表驗證流程，包含上游結構擷取、欄位規格定義、人工確認，以及固定交付 Great Expectations suite、全反向 mock data 與 field-spec CSV。當使用者呼叫 /data-validation、提供 DataHub dataset URN，或要求 data validate、資料驗證、資料表驗證、定義欄位驗證規則、建立反向測試資料或產生 Great Expectations validation suite 時使用。若需求相關但沒有 dataset URN，要求使用者提供。
 ---
 
 # 資料驗證
@@ -18,7 +18,8 @@ description: 統籌完整的 DataHub 資料表驗證流程，包含上游結構�
 4. 讀取 [confirmation-gate.md](references/confirmation-gate.md)，顯示 `workflow_id` 與完整的
    已提交 spec。只有在使用者明確確認後，才可呼叫 `confirm_field_spec`。
 5. 讀取 [artifact-delivery.md](references/artifact-delivery.md)，產生必要的 validation suite
-   與選用的 mock data，寫入使用者 workspace、完成驗證，並將 workflow 標記為完成。
+   JSON、全反向 mock CSV 與 field-spec CSV，寫入使用者 workspace、完成驗證，並將 workflow
+   標記為完成。三個 artifacts 都是固定產物，不詢問使用者是否需要或需要多少 mock data。
 
 當狀態轉換遭拒、工具回傳 `ERROR:`、使用者變更 dataset 或已提交規則，或 workflow 必須
 恢復時，讀取 [state-machine.md](references/state-machine.md)。

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import csv
+import inspect
+import io
 import json
+import re
 
 import pytest
 
@@ -24,6 +28,7 @@ def start_ready_workflow(monkeypatch: pytest.MonkeyPatch) -> str:
         lambda _urn: {"table": "orders", "fields": [{"name": "code"}]},
     )
     workflow_id = json.loads(server.start_validation(DATASET_URN))["workflow_id"]
+    assert re.fullmatch(r"dva_\d{8}_[0-9a-z]{4}", workflow_id)
     assert json.loads(server.get_table_schema(workflow_id))["table"] == "orders"
     assert json.loads(server.get_field_spec(workflow_id))["title"] == "field_spec"
     result = json.loads(
@@ -48,6 +53,10 @@ def test_server_rejects_generator_before_confirmation(
     )
 
 
+def test_mock_tool_exposes_no_row_count_parameter() -> None:
+    assert list(inspect.signature(server.gen_mock_data).parameters) == ["workflow_id"]
+
+
 def test_server_runs_complete_confirmed_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -58,7 +67,26 @@ def test_server_runs_complete_confirmed_workflow(
     assert suite["name"] == "orders_validation_suite"
     assert suite["meta"]["great_expectations_version"] == "1.18.2"
 
-    suite_path = f"artifacts/{workflow_id}/orders_validation_suite.json"
-    completed = json.loads(server.complete_validation(workflow_id, suite_path))
+    mock_rows = list(csv.DictReader(io.StringIO(server.gen_mock_data(workflow_id))))
+    assert len(mock_rows) == 100
+
+    field_spec_rows = list(
+        csv.DictReader(io.StringIO(server.gen_field_spec_csv(workflow_id)))
+    )
+    assert field_spec_rows[0]["name"] == "code"
+
+    paths = {
+        "validation_suite": f"artifacts/{workflow_id}/orders_validation_suite.json",
+        "mock_data": f"artifacts/{workflow_id}/orders_mock.csv",
+        "field_spec": f"artifacts/{workflow_id}/orders_field_spec.csv",
+    }
+    completed = json.loads(
+        server.complete_validation(
+            workflow_id,
+            paths["validation_suite"],
+            paths["mock_data"],
+            paths["field_spec"],
+        )
+    )
     assert completed["state"] == "completed"
-    assert completed["delivered_artifacts"] == {"validation_suite": suite_path}
+    assert completed["delivered_artifacts"] == paths
