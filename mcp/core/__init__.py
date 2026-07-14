@@ -12,6 +12,7 @@ from .datahub_client import DataHubError, fetch_table_schema
 from .mock_data import generate_mock_csv
 from .models import parse_field_spec, FieldSpec, FieldSpecField, DType
 from .validation_suite import build_expectation_suite
+from .workflow import WorkflowError, WorkflowState, WorkflowStore, workflow_store
 
 __all__ = [
     "DataHubError",
@@ -22,4 +23,8 @@ __all__ = [
     "FieldSpecField",
     "DType",
     "build_expectation_suite",
+    "WorkflowError",
+    "WorkflowState",
+    "WorkflowStore",
+    "workflow_store",
 ]

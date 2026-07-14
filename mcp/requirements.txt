@@ -6,4 +6,4 @@ pydantic>=2.6.0
 pandas>=2.2.0
 faker>=24.0.0
 rstr==3.2.2
-great-expectations==0.18.21
+great-expectations==1.18.2

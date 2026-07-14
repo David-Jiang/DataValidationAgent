@@ -18,7 +18,7 @@ def configurations(suite: dict, expectation_type: str, column: str | None = None
     matches = [
         expectation
         for expectation in suite["expectations"]
-        if expectation["expectation_type"] == expectation_type
+        if expectation["type"] == expectation_type
     ]
     if column is not None:
         matches = [match for match in matches if match["kwargs"].get("column") == column]
@@ -34,7 +34,8 @@ def one_configuration(suite: dict, expectation_type: str, column: str) -> dict:
 def test_suite_name_and_column_set() -> None:
     spec = FieldSpec(**spec_document(string_field("code"), boolean_field("active")))
     suite = build_expectation_suite("orders", spec)
-    assert suite["expectation_suite_name"] == "orders_validation_suite"
+    assert suite["name"] == "orders_validation_suite"
+    assert suite["meta"]["great_expectations_version"] == "1.18.2"
     table_config = configurations(suite, "expect_table_columns_to_match_set")
     assert len(table_config) == 1
     assert table_config[0]["kwargs"] == {
@@ -94,8 +95,8 @@ def test_numeric_bounds_map_to_between(
 ) -> None:
     suite = build_expectation_suite("orders", FieldSpec(**spec_document(field)))
     kwargs = one_configuration(suite, "expect_column_values_to_be_between", column)["kwargs"]
-    assert kwargs["min_value"] == minimum
-    assert kwargs["max_value"] == maximum
+    assert kwargs.get("min_value") == minimum
+    assert kwargs.get("max_value") == maximum
 
 
 def test_numeric_without_bounds_has_no_between_expectation() -> None:
@@ -117,9 +118,8 @@ def test_datetime_rules_map_to_between_and_format() -> None:
     between = one_configuration(suite, "expect_column_values_to_be_between", "created_at")
     assert between["kwargs"] == {
         "column": "created_at",
-        "min_value": "2024-01-01T00:00:00Z",
-        "max_value": "2024-01-02T00:00:00Z",
-        "parse_strings_as_datetimes": True,
+        "min_value": "2024-01-01T00:00:00+00:00",
+        "max_value": "2024-01-02T00:00:00+00:00",
     }
     format_config = one_configuration(
         suite, "expect_column_values_to_match_strftime_format", "created_at"

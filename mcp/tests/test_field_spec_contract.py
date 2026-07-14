@@ -52,6 +52,13 @@ def test_json_schema_rejects_unknown_properties() -> None:
     assert not VALIDATOR.is_valid(spec_document(string_field(unknown_rule=True)))
 
 
+@pytest.mark.parametrize("removed_property", ["version", "change_note"])
+def test_json_schema_rejects_removed_version_properties(removed_property: str) -> None:
+    assert not VALIDATOR.is_valid(
+        spec_document(string_field(), **{removed_property: 1})
+    )
+
+
 def test_json_schema_and_pydantic_accept_same_complete_document() -> None:
     raw = spec_document(
         string_field(), int_field(), float_field(), datetime_field(), boolean_field()

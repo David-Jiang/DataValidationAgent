@@ -13,5 +13,9 @@ def test_public_exports_are_available() -> None:
         "FieldSpecField",
         "DType",
         "build_expectation_suite",
+        "WorkflowError",
+        "WorkflowState",
+        "WorkflowStore",
+        "workflow_store",
     }
     assert all(hasattr(core, name) for name in core.__all__)

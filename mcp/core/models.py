@@ -119,9 +119,7 @@ class FieldSpecField(BaseModel):
 class FieldSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    table_name: str
-    version: int = Field(ge=1)
-    change_note: Optional[str] = None
+    table_name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_.-]+$")
     fields: list[FieldSpecField] = Field(min_length=1)
 
     @field_validator("fields")

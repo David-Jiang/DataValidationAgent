@@ -109,7 +109,6 @@ def test_field_names_must_be_unique() -> None:
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"version": 0},
         {"fields": []},
         {"unknown": True},
     ],
@@ -117,6 +116,12 @@ def test_field_names_must_be_unique() -> None:
 def test_top_level_contract_constraints(overrides: dict) -> None:
     with pytest.raises(ValidationError):
         FieldSpec(**spec_document(**overrides))
+
+
+@pytest.mark.parametrize("table_name", ["../orders", "sales/orders", "orders table"])
+def test_table_name_must_be_safe_for_artifact_paths(table_name: str) -> None:
+    with pytest.raises(ValidationError):
+        FieldSpec(**spec_document(table_name=table_name))
 
 
 def test_parse_field_spec_accepts_valid_json() -> None:

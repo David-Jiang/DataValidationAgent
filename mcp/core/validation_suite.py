@@ -3,20 +3,20 @@
 """
 from __future__ import annotations
 
-from great_expectations.core.expectation_configuration import ExpectationConfiguration
 from great_expectations.core import ExpectationSuite
+from great_expectations.expectations.expectation_configuration import (
+    ExpectationConfiguration,
+)
 
 from .models import DType, FieldSpec
 
 
 def build_expectation_suite(table_name: str, field_spec: FieldSpec) -> dict:
-    suite = ExpectationSuite(
-        expectation_suite_name=f"{table_name}_validation_suite"
-    )
+    suite = ExpectationSuite(name=f"{table_name}_validation_suite")
 
-    suite.add_expectation(
+    suite.add_expectation_configuration(
         ExpectationConfiguration(
-            expectation_type="expect_table_columns_to_match_set",
+            type="expect_table_columns_to_match_set",
             kwargs={"column_set": [f.name for f in field_spec.fields], "exact_match": False},
         )
     )
@@ -25,78 +25,77 @@ def build_expectation_suite(table_name: str, field_spec: FieldSpec) -> dict:
         col = f.name
 
         if f.nullable is False:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_not_be_null",
+                    type="expect_column_values_to_not_be_null",
                     kwargs={"column": col},
                 )
             )
 
         if f.dtype == DType.string and f.unique:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_be_unique",
+                    type="expect_column_values_to_be_unique",
                     kwargs={"column": col},
                 )
             )
 
         if f.allow_empty_string is False:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_not_match_regex",
+                    type="expect_column_values_to_not_match_regex",
                     kwargs={"column": col, "regex": r"^\s*$"},
                 )
             )
 
         if f.enum_values:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_be_in_set",
+                    type="expect_column_values_to_be_in_set",
                     kwargs={"column": col, "value_set": f.enum_values},
                 )
             )
 
         if f.pattern:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_match_regex",
+                    type="expect_column_values_to_match_regex",
                     kwargs={"column": col, "regex": f.pattern},
                 )
             )
 
         if f.min_value is not None or f.max_value is not None:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_be_between",
+                    type="expect_column_values_to_be_between",
                     kwargs={"column": col, "min_value": f.min_value, "max_value": f.max_value},
                 )
             )
 
         if f.datetime_after or f.datetime_before:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_be_between",
+                    type="expect_column_values_to_be_between",
                     kwargs={
                         "column": col,
                         "min_value": f.datetime_after,
                         "max_value": f.datetime_before,
-                        "parse_strings_as_datetimes": True,
                     },
                 )
             )
 
         if f.expected_datetime_format:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_match_strftime_format",
+                    type="expect_column_values_to_match_strftime_format",
                     kwargs={"column": col, "strftime_format": f.expected_datetime_format},
                 )
             )
 
         if f.invalid_value_tokens:
-            suite.add_expectation(
+            suite.add_expectation_configuration(
                 ExpectationConfiguration(
-                    expectation_type="expect_column_values_to_not_be_in_set",
+                    type="expect_column_values_to_not_be_in_set",
                     kwargs={"column": col, "value_set": f.invalid_value_tokens},
                 )
             )

@@ -1,108 +1,109 @@
 # Data Validation Agent — MCP Server
 
-提供四個 MCP tools，供共用 Agent Host 依照 Data Validation workflow 與 DataHub、
-Great Expectations 互動。
+此 MCP Server 提供 DataHub schema、field-spec 規格、人工確認關卡、Great Expectations suite
+與 mock data 產生能力，並以記憶體內的狀態機強制 workflow 順序。
 
----
+完整 Agent 流程與狀態機圖請見 [Agent 套件 README](../agent/README.md)。
 
 ## 專案結構
 
-```
+```text
 mcp/
-├── server.py                     # MCP Server 入口,定義四個工具
-├── core/                         # 核心邏輯模組
-│   ├── __init__.py               # 導出主要函式
-│   ├── models.py                 # field_spec Pydantic 驗證模型
-│   ├── mock_data.py              # 依 field_spec 產生 mock data (CSV)
-│   ├── validation_suite.py       # 依 field_spec 產生 GE Validation Suite (JSON)
-│   ├── datahub_client.py         # DataHub GraphQL API client
-│   └── schemas/
-│       └── field_spec.schema.json # field_spec 格式的正式 JSON Schema 定義
-├── requirements.txt.             # Libraries
-├── tests/                        # 單元測試
-├── requirements-dev.txt          # pytest Libraries
-├── pytest.ini                    # pytest 設定
+├── server.py
+├── core/
+│   ├── workflow.py
+│   ├── models.py
+│   ├── datahub_client.py
+│   ├── mock_data.py
+│   ├── validation_suite.py
+│   └── schemas/field_spec.schema.json
+├── tests/
+├── requirements.txt
+├── requirements-dev.txt
 ├── Dockerfile
-├── .env.example                  # 環境變數範本
-├── .env                          # 實際環境變數
-└── redeploy.sh                   # 一鍵重新 build & 啟動 container
+└── redeploy.sh
 ```
 
----
+## Workflow 工具
 
-## 四個工具說明
+| 工具 | 功能 |
+| --- | --- |
+| `start_validation` | 建立 workflow 並回傳 `workflow_id` |
+| `get_validation_state` | 讀取 state、hash、事件歷程與 artifact 狀態 |
+| `get_table_schema` | 依 workflow 保存的 URN 查詢 DataHub |
+| `get_field_spec` | 回傳具權威性的 JSON Schema 並進入草擬階段 |
+| `submit_field_spec` | 驗證並保存正式版 spec |
+| `confirm_field_spec` | 記錄人工確認與實際 spec hash |
+| `gen_validation_suite` | 只使用 Server 內已確認的 spec 產生 suite |
+| `gen_mock_data` | 只使用 Server 內已確認的 spec 產生 CSV |
+| `complete_validation` | 記錄 Agent 已寫入並驗證的 workspace 路徑 |
+| `resume_validation` | 修正作業錯誤後恢復 blocked workflow |
 
-| 工具                   | 職責                                                             |
-| ---------------------- | ---------------------------------------------------------------- |
-| `get_table_schema`     | 呼叫 DataHub API,取得上游 table 的原始 schema                    |
-| `get_field_spec`       | 回傳 field_spec 的正式 JSON Schema 定義,供討論時作為格式依據     |
-| `gen_mock_data`        | 依確認後的 field_spec 產生符合欄位規則的 mock data,回傳 CSV 字串 |
-| `gen_validation_suite` | 依確認後的 field_spec 產生 GE Expectation Suite,回傳 JSON 字串   |
+Artifact 產生器不再接受任意 `field_spec_json`。只有目前 workflow 中的確認 hash 與正式版
+spec hash 相同時才能執行。
 
-本 Server 完全 **stateless**，不持有任何討論狀態。它在 MCP initialization 只提供輕量
-server usage instructions；這些 instructions 是 client hint，不是 system prompt，也無法
-強制 workflow。
+## 記憶體內儲存
 
----
+`core/workflow.py` 的 module-level `workflow_store` 是行程內的全域 map：
+
+```text
+workflow_id -> workflow record
+```
+
+每筆紀錄保存 dataset URN、schema、規格 hash、正式版 field spec、確認紀錄、產生狀態、交付
+路徑、blocked 恢復 state 與事件歷程。Artifact 內容不保存在 map 中。
+
+這是 POC 設計：Server 重啟會遺失所有 workflow，且多個 replica 不共享狀態。
+
+## Artifact 路徑
+
+Agent Host 必須將 tool 回傳內容寫到使用者 workspace：
+
+```text
+artifacts/{workflow-id}/<table_name>_validation_suite.json
+artifacts/{workflow-id}/<table_name>_mock.csv
+```
+
+`complete_validation` 會驗證登記的相對路徑是否符合上述 workflow 專屬路徑，但
+不會存取 Agent Host workspace 或保存檔案。
 
 ## 環境設定
 
-建立 `.env` 並填入填入正確的值
+建立 `.env` 並填入 DataHub 設定：
 
 ```bash
 cp .env.example .env
 ```
 
----
-
-## Build & Deploy
+## 建置與部署
 
 ```bash
-chmod +x redeploy.sh   # 第一次使用前給予執行權限
+chmod +x redeploy.sh
 ./redeploy.sh
 ```
 
-`redeploy.sh` 會依序執行以下步驟:
+Server 啟動位址：
 
-1. 載入 `.env` 環境變數並驗證必填項目
-2. 停止並移除舊的 container(若存在)
-3. 重新 build Docker image
-4. 以新 image 啟動 container
+```text
+http://127.0.0.1:{port}/mcp
+```
 
-啟動後 MCP Server 運行於：`http://127.0.0.1:{port}/mcp`
+POC state 只存在目前行程；每次重新部署都會清除所有 workflow。
 
-**每次修改 server 程式碼後,重新執行** `./redeploy.sh` **即可完成重新部署。**
-
-## Test
-
-測試依賴不會安裝進 production image。在 `mcp/` 目錄執行：
+## 測試
 
 ```bash
 pip install -r requirements-dev.txt
 pytest
 ```
 
----
-
-## 常用指令
-
-```bash
-# 查看 server log(即時)
-docker logs -f dva-mcp
-
-# 停止 server
-docker stop
-
-# 確認 container 狀態
-docker ps | grep dva-mcp
-```
-
----
+目前的 Docker 執行環境固定為 Python 3.10.12。已在此版本中安裝完整開發依賴並執行全部
+測試，確認 Great Expectations 1.18.2、MCP Server 與狀態機均可正常運作。
 
 ## 注意事項
 
-- `gen_mock_data` 只產生符合 field spec 的正向資料並回傳 CSV 內容字串，不會直接寫入任何
-  資料庫。未指定 `row_count` 時預設產生 100 筆；使用者指定正整數時依指定數量產生，
-  不另設上限。`unique` 僅適用於 string field。
-- `gen_validation_suite` 依賴的 `great_expectations` 套件版本,需與 Airflow repo 中實際執行驗證的版本保持一致,避免 Expectation Suite 格式不相容。
-- 修改 `core/schemas/field_spec.schema.json` 後,記得同步更新 `core/models.py` 裡的 Pydantic 模型,兩者目前是手動保持同步。
+- `gen_mock_data` 預設 100 筆；使用者指定正整數時依指定數量產生。
+- `unique` 只適用於 string field。
+- Mock data 不會寫入資料庫。
+- 本專案固定使用 Great Expectations 1.18.2。
+- 修改 JSON Schema 後必須同步更新 Pydantic model 與規格測試。
