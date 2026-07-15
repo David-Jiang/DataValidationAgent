@@ -1,21 +1,24 @@
-# Field Spec 草擬
+# Validation Rules 草擬
 
 必要起始 state：`dataset_ready`。
 
-1. 草擬前呼叫 `get_field_spec(workflow_id)`。此工具會回傳具權威性的 JSON Schema，
-   並將 workflow 移至 `drafting_spec`。
-2. 根據上游 schema、使用者提供的樣本、領域文件與討論建立草稿。
-3. 只有上游 metadata 直接提供的事實可使用 `source: "upstream_schema"`；使用者提供或
-   確認的驗證要求使用 `source: "discussed_with_user"`。
-4. 將未解決的假設標示為 `confidence: "medium"` 或 `"low"`。
-5. 只詢問缺少的驗證語意：nullability、string 唯一性、無效值 token、空字串、列舉值、
-   pattern、數值範圍與 datetime 邊界或格式。
-6. 每個 field 都必須符合該資料型別的規格。`unique` 只適用於 string field。
-7. 除非使用者另有指定，初始無效值 token 使用
-   `["NULL", "null", "NA", "None", "none"]`。
-8. 完整草稿準備完成後，呼叫 `submit_field_spec(workflow_id, field_spec_json)`。
+1. 呼叫 `get_field_spec(workflow_id)`，取得權威 field-spec JSON Schema並進入
+   `drafting_rules`。
+2. 依 upstream schema、樣本、文件與使用者討論完成 field spec。它只負責產生 col rules；
+   dtype-specific 條件仍以 schema 支援的 null、unique、invalid token、empty string、enum、
+   pattern、numeric range、datetime range/format 為準。
+3. 同時詢問跨欄位商業語意。使用者可用自然語言、SQL 或其他方式說明，但 Agent 必須正規化
+   為 row rule，不可執行輸入內容。
+4. 每條 row rule 必須：
+   - 使用唯一且以 `row.` 開頭的 `id`。
+   - 具體中文 `desc`。
+   - `columns` 至少列出兩個 input schema 中存在的欄位。
+   - `examples.pass` 與 `examples.fail` 各至少一筆 `{"name": "...", "sql": "..."}`。
+5. `input_schema` 由 field spec 自動縮減為 `name`、`dtype`；不要自行提交額外欄位。
+6. 呼叫 `submit_validation_rules(workflow_id, field_spec_json, row_rules_json)`。沒有 row rule 時
+   明確傳入 `[]`。
 
-若使用者在提交或確認後修改任何規則，編輯前先呼叫 `get_field_spec(workflow_id)`。此動作會
-使舊確認失效，並將 workflow 移回 `drafting_spec`。之後重新提交完整、更新後的正式版 spec。
+若使用者在提交或確認後修改任何 col/row rule，先再次呼叫 `get_field_spec`，重新提交完整
+field spec 與完整 row-rule array。
 
-完成條件：`submit_field_spec` 成功，且 workflow 進入 `awaiting_confirmation`。
+完成條件：workflow 進入 `awaiting_confirmation`。

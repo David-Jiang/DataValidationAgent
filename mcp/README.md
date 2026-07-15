@@ -1,124 +1,87 @@
 # Data Validation Agent — MCP Server
 
-此 MCP Server 提供 DataHub schema、field-spec 規格、人工確認關卡、Great Expectations
-suite、全反向 mock data 與 field-spec CSV 產生能力，並以記憶體內的狀態機強制 workflow
-順序。
+此 MCP Server 將 DataHub schema、既有 `field_spec` 欄位模板與使用者討論出的跨欄位規則，
+整理成可確認、可移植的 validation-as-code package。執行層只依賴 Pandas，不再依賴
+Great Expectations。
 
-完整 Agent 流程與狀態機圖請見 [Agent 套件 README](../agent/README.md)。
+完整 Agent 流程請見 [Agent 套件 README](../agent/README.md)。
 
-## 專案結構
+## 核心資料契約
 
-```text
-mcp/
-├── server.py
-├── core/
-│   ├── workflow.py
-│   ├── models.py
-│   ├── datahub_client.py
-│   ├── field_spec_csv.py
-│   ├── mock_data.py
-│   ├── validation_suite.py
-│   └── schemas/field_spec.schema.json
-├── tests/
-├── requirements.txt
-├── requirements-dev.txt
-├── Dockerfile
-└── redeploy.sh
-```
+`validation_rules.json` 包含：
+
+- `input_schema`：每欄只保存 `name`、`dtype`。
+- `col_rules`：由 `core/schemas/field_spec.schema.json` 與正式版 field spec 確定性產生。
+- `row_rules`：由使用者以自然語言、SQL 或其他方式說明後，經 Agent 正規化產生。
+- 每條 rule 只保存 `id`、`desc`、`columns`、`examples`。`examples.pass` 與
+  `examples.fail` 的項目格式皆為 `{"name": "...", "sql": "..."}`。
+
+`examples.sql` 是協助人類 review 的 boolean expression，Server 與產生的 runtime 都不會
+執行它，因此不會形成 SQL injection 執行路徑。
 
 ## Workflow 工具
 
 | 工具 | 功能 |
 | --- | --- |
 | `start_validation` | 建立 workflow 並回傳 `workflow_id` |
-| `get_validation_state` | 讀取 state、hash、事件歷程與 artifact 狀態 |
+| `get_validation_state` | 讀取 state、hash、事件與 artifact 狀態 |
 | `get_table_schema` | 依 workflow 保存的 URN 查詢 DataHub |
-| `get_field_spec` | 回傳具權威性的 JSON Schema 並進入草擬階段 |
-| `submit_field_spec` | 驗證並保存正式版 spec |
-| `confirm_field_spec` | 記錄人工確認與實際 spec hash |
-| `gen_validation_suite` | 只使用 Server 內已確認的 spec 產生 suite |
-| `gen_mock_data` | 只使用 Server 內已確認的 spec 產生固定的全反向 CSV |
-| `gen_field_spec_csv` | 將 Server 內已確認的正式版 spec 展開為 CSV |
-| `complete_validation` | 記錄 Agent 已寫入並驗證的 workspace 路徑 |
+| `get_field_spec` | 回傳 col-rule 模板並進入 `drafting_rules` |
+| `submit_validation_rules` | 驗證 field spec、建立 col rules 並保存 row rules |
+| `get_submitted_validation_rules` | 取得待確認的完整 col/row rules |
+| `confirm_validation_rules` | 記錄完整 rules 與 field spec 的人工確認 hash |
+| `gen_validation_rules` | 產生 `validation_rules.json` |
+| `gen_readme` | 產生中文規則摘要與分組表格 |
+| `gen_data_validation` | 產生 Pandas-native `data_validation.py` |
+| `gen_test_data_validation` | 產生每條規則皆有 pass/fail case 的 pytest |
+| `complete_validation` | 四個檔案寫入、讀回並通過 pytest 後登記完成 |
 | `resume_validation` | 修正作業錯誤後恢復 blocked workflow |
 
-Artifact 產生器不再接受任意 `field_spec_json`。只有目前 workflow 中的確認 hash 與正式版
-spec hash 相同時才能執行。
+Artifact generators 只讀取 Server 內已提交且已確認的 field spec 與 validation rules。重新
+呼叫 `get_field_spec` 會使舊 confirmation 與 artifact 狀態失效。
 
-`workflow_id` 格式為 `dva_{YYYYMMDD}_{四碼 base36 suffix}`，日期使用 UTC。隨機選擇起始
-suffix 後，若發生碰撞便依序探查下一個 suffix，確保目前 process 內唯一。
+## 人工確認關卡
 
-## 記憶體內儲存
-
-`core/workflow.py` 的 module-level `workflow_store` 是行程內的全域 map：
-
-```text
-workflow_id -> workflow record
-```
-
-每筆紀錄保存 dataset URN、schema、規格 hash、正式版 field spec、確認紀錄、產生狀態、交付
-路徑、blocked 恢復 state 與事件歷程。Artifact 內容不保存在 map 中。
-
-這是 POC 設計：Server 重啟會遺失所有 workflow，且多個 replica 不共享狀態。
+Agent 必須先呼叫 `get_submitted_validation_rules`，將全部 `col_rules` 與 `row_rules` 分成兩組
+可展開的 Markdown tables 顯示，包含 passing/failing SQL examples。只有使用者明確確認兩組
+規則後，才能呼叫 `confirm_validation_rules`。
 
 ## Artifact 路徑
 
-Agent Host 必須將 tool 回傳內容寫到使用者 workspace：
-
 ```text
-artifacts/{workflow-id}/<table_name>_validation_suite.json
-artifacts/{workflow-id}/<table_name>_mock.csv
-artifacts/{workflow-id}/<table_name>_field_spec.csv
+artifacts/{workflow-id}/validation_rules.json
+artifacts/{workflow-id}/README.md
+artifacts/{workflow-id}/data_validation.py
+artifacts/{workflow-id}/test_data_validation.py
 ```
 
-`complete_validation` 會驗證登記的相對路徑是否符合上述 workflow 專屬路徑，但
-不會存取 Agent Host workspace 或保存檔案。
+`data_validation.validate(df)` 回傳 `(valid_df, invalid_df)`。空 DataFrame 會在任何 schema 或
+rule evaluation 前直接回傳兩個空 DataFrame。非空資料若違反規則或執行規則時發生例外，
+不會向呼叫端 raise；資料會進入 `invalid_df`，並附加 `__validation_failed_rules__` 與
+`__validation_failure_reasons__`。
 
-Field-spec CSV 固定包含：`table_name`、`name`、`dtype`、`nullable`、`unique`、
-`allow_empty_string`、`enum_values`、`pattern`、`min_value`、`max_value`、
-`datetime_after`、`datetime_before`、`expected_datetime_format`、
-`invalid_value_tokens`、`confidence` 與 `source`。每個資料欄位各占一列。
+產生的 pytest 包含每條 col/row rule 至少一個 passing case 與 failing case，以及空
+DataFrame shortcut；不產生 execution-failure 測試。
 
-## 環境設定
+## 記憶體內儲存
 
-建立 `.env` 並填入 DataHub 設定：
+`core/workflow.py` 的 module-level `workflow_store` 是 process-local map。它保存 dataset URN、
+upstream schema、field spec/rules hash、人工確認、artifact 狀態與歷程，不保存 artifact
+內容。這是 POC 設計：Server 重啟會遺失 workflow，多個 replica 也不共享狀態。
+
+## 環境與測試
 
 ```bash
 cp .env.example .env
+pip install -r requirements-dev.txt
+pytest
 ```
 
-## 建置與部署
+部署可執行：
 
 ```bash
 chmod +x redeploy.sh
 ./redeploy.sh
 ```
 
-Server 啟動位址：
-
-```text
-http://127.0.0.1:{port}/mcp
-```
-
-POC state 只存在目前行程；每次重新部署都會清除所有 workflow。
-
-## 測試
-
-```bash
-pip install -r requirements-dev.txt
-pytest
-```
-
-目前的 Docker 執行環境固定為 Python 3.10.12。已在此版本中安裝完整開發依賴並執行全部
-測試，確認 Great Expectations 1.18.2、MCP Server 與狀態機均可正常運作。
-
-## 注意事項
-
-- `gen_mock_data` 不接受筆數參數。基準為 100 筆；規則案例超過 100 時擴充至足以覆蓋全部
-  案例，最多 1000 筆，超出的案例直接截斷且不報錯。
-- Mock data 每列至少注入一條規則違規，固定作為 ETL 與 validation suite 的反向測試資料。
-- Validation suite JSON、mock CSV 與 field-spec CSV 都是必要 artifacts。
-- `unique` 只適用於 string field。
-- Mock data 不會寫入資料庫。
-- 本專案固定使用 Great Expectations 1.18.2。
-- 修改 JSON Schema 後必須同步更新 Pydantic model 與規格測試。
+修改 field-spec JSON Schema 後，必須同步更新 Pydantic model、col-rule generator 與測試。

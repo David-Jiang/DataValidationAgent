@@ -2,24 +2,27 @@
 
 必要起始 state：`confirmed`。
 
-1. 一律呼叫 `gen_validation_suite(workflow_id)`。
-2. 一律呼叫 `gen_mock_data(workflow_id)`。不可詢問使用者是否需要或要求使用者指定筆數。
-   Server 會產生全反向資料，基準為 100 筆；規則較多時可超過 100，最多 1000 筆。
-3. 一律呼叫 `gen_field_spec_csv(workflow_id)`。
-4. 將三個回傳內容寫入使用者 workspace，且必須使用以下路徑：
+1. 呼叫 `gen_validation_rules(workflow_id)`。
+2. 呼叫 `gen_readme(workflow_id)`。
+3. 依每條已確認的 row rule 撰寫 pure Pandas function body，組成
+   `row_rule_functions_json` 後呼叫 `gen_data_validation`。不可直接執行或貼入使用者提供的
+   SQL/Python 原文。
+4. 為每一條 col rule 與 row rule 準備至少一組 concrete `pass_cases` 與 `fail_cases`，組成
+   `rule_test_cases_json` 後呼叫 `gen_test_data_validation`。
+5. 將回傳內容寫入：
 
    ```text
-   artifacts/{workflow_id}/<table_name>_validation_suite.json
-   artifacts/{workflow_id}/<table_name>_mock.csv
-   artifacts/{workflow_id}/<table_name>_field_spec.csv
+   artifacts/{workflow_id}/validation_rules.json
+   artifacts/{workflow_id}/README.md
+   artifacts/{workflow_id}/data_validation.py
+   artifacts/{workflow_id}/test_data_validation.py
    ```
 
-   必要時建立 workflow 目錄。
-5. 讀回每個檔案，確認檔案存在且內容與產生器回傳內容一致。
-6. 使用 workspace 相對路徑呼叫
-   `complete_validation(workflow_id, suite_path, mock_path, field_spec_path)`。
-7. 回報 workflow ID、所有交付路徑、已呼叫的 MCP 工具，以及剩餘的低信心規則。
+6. 讀回四個檔案並確認內容與 generator 回傳一致。
+7. 在 artifact 目錄執行 `pytest test_data_validation.py`。不可略過失敗；修正 generator input
+   或 rules 後重跑。產生的測試應涵蓋每條 rule 的 pass/fail case 與空 DataFrame shortcut，
+   不需要 execution-failure test。
+8. 使用上述 workspace-relative paths 呼叫 `complete_validation(...)`。
+9. 回報 workflow ID、四個路徑、pytest 結果與規則總數。
 
-三個 artifacts 全部寫入並驗證完成前，不可宣稱完成。MCP Server 只保存 workflow state 與
-已確認的 spec，不保存 artifact 檔案。全反向 mock CSV 的每列至少違反一條規則，目的是讓
-ETL 後接 validation suite 時能驗證各條規則確實會抓到錯誤資料。
+四個檔案全數寫入、讀回且 pytest 通過前不可宣稱完成。

@@ -10,23 +10,27 @@ from core import (
     DataHubError,
     WorkflowError,
     WorkflowState,
-    build_expectation_suite,
+    build_validation_rules,
     fetch_table_schema,
-    generate_field_spec_csv,
-    generate_mock_csv,
     parse_field_spec,
+    parse_row_rule_implementations,
+    parse_row_rules,
+    parse_rule_test_cases,
+    render_data_validation_module,
+    render_readme,
+    render_test_module,
+    render_validation_rules_json,
     workflow_store,
 )
 
 _SCHEMA_PATH = Path(__file__).parent / "core" / "schemas" / "field_spec.schema.json"
 _SERVER_INSTRUCTIONS = """
 這是 Data Validation Agent MCP Server。每個 workflow 都必須從 start_validation(dataset_urn)
-開始，並將回傳的 workflow_id 傳給所有後續 tool。請依照以下順序執行：
-get_table_schema -> get_field_spec -> submit_field_spec -> confirm_field_spec ->
-gen_validation_suite -> gen_mock_data -> gen_field_spec_csv -> complete_validation。
-Server 會拒絕不符合目前 workflow state 的操作。只有在人類完整檢視 field_spec，並明確回覆
-「確認」等肯定語句後，才能呼叫 confirm_field_spec。Artifact 會以字串回傳，Agent Host 必須
-將其寫入 artifacts/{workflow_id}/；MCP Server 不保存 artifact 檔案。
+開始，並將回傳的 workflow_id 傳給所有後續 tool。流程為：get_table_schema ->
+get_field_spec -> submit_validation_rules -> 使用者同時確認完整 col_rules 與 row_rules ->
+confirm_validation_rules -> 四個 artifact generators -> complete_validation。
+validation_rules.json 內的 examples.sql 只作為 review 用的 boolean expression，Server 不會執行。
+Agent Host 必須將 artifacts 寫入 artifacts/{workflow_id}/，並在完成前讀回及執行 pytest。
 """.strip()
 
 mcp = FastMCP(
@@ -73,10 +77,7 @@ def get_validation_state(workflow_id: str) -> str:
 
 @mcp.tool()
 def get_table_schema(workflow_id: str) -> str:
-    """
-    取得由 start_validation 登記之 dataset 的上游 DataHub schema。
-    只有 workflow 處於 awaiting_schema 時才能使用此 tool。
-    """
+    """依 workflow 保存的 DataHub URN 取得上游 schema。"""
     try:
         dataset_urn = workflow_store.dataset_urn(workflow_id)
         schema = fetch_table_schema(dataset_urn)
@@ -88,19 +89,16 @@ def get_table_schema(workflow_id: str) -> str:
         workflow_store.block(workflow_id, str(exc), WorkflowState.awaiting_schema)
         return f"ERROR: {exc}"
     except Exception as exc:
-        workflow_store.block(
-            workflow_id,
-            f"取得資料表 schema 時發生例外：{exc}",
-            WorkflowState.awaiting_schema,
-        )
-        return f"ERROR: 取得資料表 schema 時發生例外：{exc}"
+        message = f"取得資料表 schema 時發生例外：{exc}"
+        workflow_store.block(workflow_id, message, WorkflowState.awaiting_schema)
+        return f"ERROR: {message}"
 
 
 @mcp.tool()
 def get_field_spec(workflow_id: str) -> str:
     """
-    回傳具權威性的 field_spec JSON Schema，並進入 drafting_spec。
-    若在 spec 已提交或確認後呼叫，原有 confirmation 與 artifacts 都會失效。
+    回傳 dtype 專屬 col-rule 討論模板，並進入 drafting_rules。
+    再次呼叫會使既有 confirmation 與 artifacts 失效。
     """
     try:
         contract = _SCHEMA_PATH.read_text(encoding="utf-8")
@@ -109,10 +107,7 @@ def get_field_spec(workflow_id: str) -> str:
     except WorkflowError as exc:
         return f"ERROR: {exc}"
     except FileNotFoundError:
-        message = (
-            "找不到 field_spec schema 檔案，請確認 Server 部署內容包含 "
-            "core/schemas/field_spec.schema.json"
-        )
+        message = "找不到 core/schemas/field_spec.schema.json"
         try:
             workflow_store.block(workflow_id, message, _state(workflow_id))
         except WorkflowError:
@@ -128,25 +123,45 @@ def get_field_spec(workflow_id: str) -> str:
 
 
 @mcp.tool()
-def submit_field_spec(workflow_id: str, field_spec_json: str) -> str:
+def submit_validation_rules(
+    workflow_id: str,
+    field_spec_json: str,
+    row_rules_json: str,
+) -> str:
     """
-    驗證並保存 canonical field_spec，接著進入 awaiting_confirmation。
-    提交的 spec 必須符合 get_field_spec 最近一次回傳的 schema。
+    將 field spec 拆成 col_rules，並合併使用者以自然語言、SQL 或其他方式討論後建立的
+    row_rules。row_rules_json 必須是 rule array；若沒有 row rule，傳入 []。
     """
     try:
         spec = parse_field_spec(field_spec_json)
-        return _json(workflow_store.submit_spec(workflow_id, spec))
+        row_rules = parse_row_rules(row_rules_json)
+        dataset_urn = workflow_store.dataset_reference(workflow_id)
+        rules = build_validation_rules(dataset_urn, spec, row_rules)
+        return _json(workflow_store.submit_rules(workflow_id, spec, rules))
     except (WorkflowError, ValueError) as exc:
         return f"ERROR: {exc}"
     except Exception as exc:
-        return f"ERROR: 提交 field_spec 時發生例外：{exc}"
+        return f"ERROR: 提交 validation rules 時發生例外：{exc}"
 
 
 @mcp.tool()
-def confirm_field_spec(workflow_id: str) -> str:
+def get_submitted_validation_rules(workflow_id: str) -> str:
     """
-    確認目前實際提交的 field_spec。
-    Agent 必須先向人類顯示完整 spec 與 workflow_id，並收到「確認」等明確肯定回覆，才能呼叫。
+    回傳實際提交的完整 validation_rules，供 Agent 以 col rules 與 row rules 分組表格顯示。
+    只有 awaiting_confirmation state 可使用。
+    """
+    try:
+        rules = workflow_store.pending_validation_rules(workflow_id)
+        return render_validation_rules_json(rules)
+    except WorkflowError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+def confirm_validation_rules(workflow_id: str) -> str:
+    """
+    確認目前完整 col_rules 與 row_rules。Agent 必須先用分組 Markdown tables 顯示全部規則，
+    並收到使用者明確肯定回覆後才能呼叫。
     """
     try:
         return _json(workflow_store.confirm(workflow_id))
@@ -155,65 +170,77 @@ def confirm_field_spec(workflow_id: str) -> str:
 
 
 @mcp.tool()
-def gen_validation_suite(workflow_id: str) -> str:
-    """
-    使用 Server 內已確認的 field_spec 產生必要的 Great Expectations suite。
-    Agent Host 必須將回傳的 JSON 寫入
-    artifacts/{workflow_id}/<table_name>_validation_suite.json.
-    """
+def gen_validation_rules(workflow_id: str) -> str:
+    """產生 artifacts/{workflow_id}/validation_rules.json。"""
     try:
-        resume_state = _state(workflow_id)
-        spec = workflow_store.field_spec(workflow_id)
-        suite = build_expectation_suite(spec.table_name, spec)
-        workflow_store.artifact_generated(workflow_id, "validation_suite")
-        return _json(suite)
+        rules = workflow_store.validation_rules(workflow_id)
+        content = render_validation_rules_json(rules)
+        workflow_store.artifact_generated(workflow_id, "validation_rules")
+        return content
     except WorkflowError as exc:
         return f"ERROR: {exc}"
     except Exception as exc:
-        message = f"產生 validation suite 時發生例外：{exc}"
+        message = f"產生 validation_rules.json 時發生例外：{exc}"
+        workflow_store.block(workflow_id, message, _state(workflow_id))
+        return f"ERROR: {message}"
+
+
+@mcp.tool()
+def gen_readme(workflow_id: str) -> str:
+    """產生中文、分組且含 summary tables 的 artifacts/{workflow_id}/README.md。"""
+    try:
+        resume_state = _state(workflow_id)
+        rules = workflow_store.validation_rules(workflow_id)
+        content = render_readme(rules)
+        workflow_store.artifact_generated(workflow_id, "readme")
+        return content
+    except WorkflowError as exc:
+        return f"ERROR: {exc}"
+    except Exception as exc:
+        message = f"產生 README.md 時發生例外：{exc}"
         workflow_store.block(workflow_id, message, resume_state)
         return f"ERROR: {message}"
 
 
 @mcp.tool()
-def gen_mock_data(workflow_id: str) -> str:
+def gen_data_validation(workflow_id: str, row_rule_functions_json: str) -> str:
     """
-    使用 Server 內已確認的 field_spec 產生必要的全反向 CSV mock data。
-    筆數由 Server 控制：基準 100、規則較多時可增加，最多 1000。
-    Agent Host 必須將回傳的 CSV 寫入
-    artifacts/{workflow_id}/<table_name>_mock.csv.
+    產生 Pandas-native data_validation.py。Agent 必須依已確認 row rules 提供每條 row rule 的
+    pure Python function body；禁止直接使用使用者提供的 SQL/Python 原文。
     """
     try:
         resume_state = _state(workflow_id)
+        rules = workflow_store.validation_rules(workflow_id)
         spec = workflow_store.field_spec(workflow_id)
-        csv_text = generate_mock_csv(spec)
-        workflow_store.artifact_generated(workflow_id, "mock_data")
-        return csv_text
-    except WorkflowError as exc:
+        implementations = parse_row_rule_implementations(row_rule_functions_json)
+        content = render_data_validation_module(rules, spec, implementations)
+        workflow_store.artifact_generated(workflow_id, "data_validation")
+        return content
+    except (WorkflowError, ValueError) as exc:
         return f"ERROR: {exc}"
     except Exception as exc:
-        message = f"產生 mock data 時發生例外：{exc}"
+        message = f"產生 data_validation.py 時發生例外：{exc}"
         workflow_store.block(workflow_id, message, resume_state)
         return f"ERROR: {message}"
 
 
 @mcp.tool()
-def gen_field_spec_csv(workflow_id: str) -> str:
+def gen_test_data_validation(workflow_id: str, rule_test_cases_json: str) -> str:
     """
-    將 Server 內已確認的正式版 field_spec 展開為必要的 CSV artifact。
-    Agent Host 必須將回傳的 CSV 寫入
-    artifacts/{workflow_id}/<table_name>_field_spec.csv。
+    產生 pytest；每條 col/row rule 都必須提供至少一組 concrete passing 與 failing rows。
+    不產生 execution failure tests，但會驗證空 DataFrame 直接回傳兩個空 DataFrame。
     """
     try:
         resume_state = _state(workflow_id)
-        spec = workflow_store.field_spec(workflow_id)
-        csv_text = generate_field_spec_csv(spec)
-        workflow_store.artifact_generated(workflow_id, "field_spec")
-        return csv_text
-    except WorkflowError as exc:
+        rules = workflow_store.validation_rules(workflow_id)
+        test_cases = parse_rule_test_cases(rule_test_cases_json)
+        content = render_test_module(rules, test_cases)
+        workflow_store.artifact_generated(workflow_id, "test_data_validation")
+        return content
+    except (WorkflowError, ValueError) as exc:
         return f"ERROR: {exc}"
     except Exception as exc:
-        message = f"產生 field_spec CSV 時發生例外：{exc}"
+        message = f"產生 test_data_validation.py 時發生例外：{exc}"
         workflow_store.block(workflow_id, message, resume_state)
         return f"ERROR: {message}"
 
@@ -221,21 +248,20 @@ def gen_field_spec_csv(workflow_id: str) -> str:
 @mcp.tool()
 def complete_validation(
     workflow_id: str,
-    suite_path: str,
-    mock_path: str,
-    field_spec_path: str,
+    validation_rules_path: str,
+    readme_path: str,
+    data_validation_path: str,
+    test_data_validation_path: str,
 ) -> str:
-    """
-    Agent Host 寫入並驗證三個必要 artifacts 後，將交付標記為完成。
-    路徑必須分別符合 validation suite JSON、全反向 mock CSV 與 field_spec CSV 的預期路徑。
-    """
+    """四個 artifacts 已寫入、讀回並通過 pytest 後，將 workflow 標記為完成。"""
     try:
         return _json(
             workflow_store.complete(
                 workflow_id,
-                suite_path,
-                mock_path,
-                field_spec_path,
+                validation_rules_path,
+                readme_path,
+                data_validation_path,
+                test_data_validation_path,
             )
         )
     except WorkflowError as exc:
@@ -244,7 +270,7 @@ def complete_validation(
 
 @mcp.tool()
 def resume_validation(workflow_id: str) -> str:
-    """在人類修正輸入或環境後，恢復處於 blocked 的 workflow。"""
+    """在修正輸入或環境後恢復 blocked workflow。"""
     try:
         return _json(workflow_store.resume(workflow_id))
     except WorkflowError as exc:

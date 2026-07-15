@@ -1,148 +1,83 @@
 # Data Validation Agent — Agent 套件
 
-本目錄提供 Agent Host 使用的單一入口 Skill。使用者可以明確輸入：
+本目錄提供 Agent Host 使用的單一 `data-validation` Skill。輸入 DataHub dataset URN 後，
+Agent 會與使用者一起確認欄位規則及跨欄位商業規則，最後交付可直接搬入 Airflow ETL repo
+的 Pandas validation module 與 pytest。
 
-```text
-/data-validation urn:li:dataset:(urn:li:dataPlatform:hive,orders,PROD)
-```
-
-也可以用自然語言提出 data validation、table validation、field rules、mock data 或
-Great Expectations suite 等需求。若沒有 DataHub dataset URN，Agent 會先要求使用者提供。
-
-## 設計
-
-- `data-validation` 是唯一可被 Agent Host 發現及使用者呼叫的 Skill。
-- 原本的四個階段已改為 `references/`，沒有 Skill frontmatter，不是獨立入口。
-- 不再部署額外 `SYSTEM_PROMPT.md`；角色、流程、限制條件與觸發規則都由單一 Skill 定義。
-- MCP Server 以行程內的全域 map 保存 workflow state、上游 schema、正式版
-  `field_spec`、確認紀錄與 artifact 狀態。
-- Agent Host 只保存 MCP 回傳的 artifact 到使用者 workspace；MCP Server 不保存 artifact
-  檔案。
-
-```text
-agent/skills/data-validation/
-├── SKILL.md
-└── references/
-    ├── dataset-intake.md
-    ├── field-spec.md
-    ├── confirmation-gate.md
-    ├── artifact-delivery.md
-    └── state-machine.md
-```
-
-## 狀態機
-
-每次呼叫 `start_validation(dataset_urn)` 都會建立新的 `workflow_id`，格式為
-`dva_{YYYYMMDD}_{四碼亂數}`，日期使用 UTC。Server 會在目前 process 內遇到碰撞時探查下一個
-四碼 suffix，確保 ID 唯一。後續所有 MCP tools 必須使用同一個 ID；Server 會拒絕不符合
-目前 state 的操作。
+## Workflow
 
 ```mermaid
 stateDiagram-v2
-    [*] --> AwaitingSchema: start_validation(dataset_urn)
-
-    AwaitingSchema --> DatasetReady: get_table_schema 成功
-    AwaitingSchema --> Blocked: DataHub 或執行環境錯誤
-
-    DatasetReady --> DraftingSpec: get_field_spec 成功
-    DraftingSpec --> AwaitingConfirmation: submit_field_spec 成功
-
-    AwaitingConfirmation --> Confirmed: 人類確認後呼叫 confirm_field_spec
-    AwaitingConfirmation --> DraftingSpec: get_field_spec 使已提交 spec 失效
-    Confirmed --> DraftingSpec: get_field_spec 使確認失效
-
-    Confirmed --> GeneratingArtifacts: 任一固定 artifact 產生工具
-    GeneratingArtifacts --> GeneratingArtifacts: 產生其餘 artifact
-    GeneratingArtifacts --> Completed: Agent 寫入檔案後呼叫 complete_validation
-    GeneratingArtifacts --> Blocked: 產生器或執行環境錯誤
-
+    [*] --> AwaitingSchema: start_validation
+    AwaitingSchema --> DatasetReady: get_table_schema
+    DatasetReady --> DraftingRules: get_field_spec
+    DraftingRules --> AwaitingConfirmation: submit_validation_rules
+    AwaitingConfirmation --> Confirmed: confirm_validation_rules
+    AwaitingConfirmation --> DraftingRules: 修改規則
+    Confirmed --> DraftingRules: 修改規則
+    Confirmed --> GeneratingArtifacts: 任一 generator
+    GeneratingArtifacts --> GeneratingArtifacts: 其餘 generators
+    GeneratingArtifacts --> Completed: 寫入、讀回、pytest、complete_validation
+    AwaitingSchema --> Blocked: 作業錯誤
+    GeneratingArtifacts --> Blocked: 作業錯誤
     Blocked --> AwaitingSchema: resume_validation
-    Blocked --> DatasetReady: resume_validation
-    Blocked --> DraftingSpec: resume_validation
-    Blocked --> Confirmed: resume_validation
     Blocked --> GeneratingArtifacts: resume_validation
-
     Completed --> [*]
 ```
 
-### 各狀態的不變條件
-
-| 狀態 | 必要條件 | 可執行的主要操作 |
+| 狀態 | 必要條件 | 主要操作 |
 | --- | --- | --- |
-| `awaiting_schema` | 已建立 workflow 並保存 dataset URN | `get_table_schema` |
-| `dataset_ready` | upstream schema 已成功取得 | `get_field_spec` |
-| `drafting_spec` | 已載入最新 field-spec contract | `submit_field_spec` |
-| `awaiting_confirmation` | 正式版 field spec 已驗證並保存 | 人工審閱、`confirm_field_spec` |
-| `confirmed` | confirmation hash 等於目前 spec hash | artifact generators |
-| `generating_artifacts` | 至少一個產生器已成功 | 產生其餘固定 artifacts；三個完成後執行 `complete_validation` |
-| `blocked` | 保存錯誤與原本的恢復 state | 修正後執行 `resume_validation` |
-| `completed` | 三個固定 artifacts 已寫入並由 Agent 驗證 | 終止狀態 |
+| `awaiting_schema` | workflow 已保存 dataset URN | `get_table_schema` |
+| `dataset_ready` | 已取得 upstream schema | `get_field_spec` |
+| `drafting_rules` | 已載入 field-spec contract | 討論 col/row rules；`submit_validation_rules` |
+| `awaiting_confirmation` | 完整 rules 已保存 | 分組顯示並等待人工確認 |
+| `confirmed` | field spec 與 rules hash 均已確認 | 四個 artifact generators |
+| `generating_artifacts` | 至少一個 artifact 已產生 | 產生其餘檔案並驗證 |
+| `completed` | 四個檔案已寫入、讀回並通過 pytest | 終止狀態 |
 
-任何已提交、已確認或正在產生 artifacts 的 spec 只要重新進入 `get_field_spec`，既有確認、
-產生與交付狀態都會失效。
+## 確認 Acceptance Criteria
 
-## 人工確認關卡
+確認畫面必須來自 `get_submitted_validation_rules` 的實際內容，並分為：
 
-Agent 必須先顯示：
+1. Column Rules：依欄位分組，每組使用 `<details>` 展開表格。
+2. Cross-field Row Rules：獨立 `<details>` 展開完整表格；若沒有規則也明確顯示 0 條。
 
-- `workflow_id` 與 `table_name`
-- 完整的共通規則表
-- 完整的資料型別專屬規則表
-- 所有中／低信心的假設與剩餘風險
+每列顯示 rule ID、描述、欄位、passing examples 與 failing examples。使用者以自然語言、
+SQL 或其他方式提出的 row rule，也必須正規化、提交及顯示後才能被確認。沉默、問題、部分
+意見都不算確認；任何修改都要重新提交並再次確認兩組規則。
 
-使用者只需要清楚回覆「確認」、「可以」、「沒問題」、`confirm` 等肯定語句。Agent 收到回覆
-後才可呼叫 `confirm_field_spec(workflow_id)`。
+## 工具順序
 
-POC 的 MCP Server 能強制 state transition 與已確認 spec 的 hash，但無法單從 MCP protocol
-證明呼叫確認 tool 的一定是人類。若未來需要不可偽造的人工核准，應加入具身分驗證的核准
-介面或簽章核准 token。
-
-## MCP 工具執行順序
-
-| 順序 | 工具 | 狀態轉換 |
-| --- | --- | --- |
-| 1 | `start_validation(dataset_urn)` | 建立 `awaiting_schema` |
-| 2 | `get_table_schema(workflow_id)` | `awaiting_schema → dataset_ready` |
-| 3 | `get_field_spec(workflow_id)` | `dataset_ready → drafting_spec` |
-| 4 | `submit_field_spec(workflow_id, field_spec_json)` | `drafting_spec → awaiting_confirmation` |
-| 5 | `confirm_field_spec(workflow_id)` | `awaiting_confirmation → confirmed` |
-| 6 | `gen_validation_suite(workflow_id)` | `confirmed → generating_artifacts` |
-| 7 | `gen_mock_data(workflow_id)` | 維持 `generating_artifacts` |
-| 8 | `gen_field_spec_csv(workflow_id)` | 維持 `generating_artifacts` |
-| 9 | `complete_validation(workflow_id, suite_path, mock_path, field_spec_path)` | `generating_artifacts → completed` |
-
-`get_validation_state` 可讀取狀態；`resume_validation` 只用於修正作業錯誤後恢復
-`blocked` workflow。
+| # | 工具 |
+| ---: | --- |
+| 1 | `start_validation(dataset_urn)` |
+| 2 | `get_table_schema(workflow_id)` |
+| 3 | `get_field_spec(workflow_id)` |
+| 4 | `submit_validation_rules(workflow_id, field_spec_json, row_rules_json)` |
+| 5 | `get_submitted_validation_rules(workflow_id)` |
+| 6 | 使用者明確確認後執行 `confirm_validation_rules(workflow_id)` |
+| 7 | `gen_validation_rules(workflow_id)` |
+| 8 | `gen_readme(workflow_id)` |
+| 9 | `gen_data_validation(workflow_id, row_rule_functions_json)` |
+| 10 | `gen_test_data_validation(workflow_id, rule_test_cases_json)` |
+| 11 | 寫入、讀回、執行 pytest，再呼叫 `complete_validation(...)` |
 
 ## Artifact 交付
 
-Artifact 只寫入使用者 workspace：
-
 ```text
-artifacts/{workflow-id}/<table_name>_validation_suite.json
-artifacts/{workflow-id}/<table_name>_mock.csv
-artifacts/{workflow-id}/<table_name>_field_spec.csv
+artifacts/{workflow-id}/validation_rules.json
+artifacts/{workflow-id}/README.md
+artifacts/{workflow-id}/data_validation.py
+artifacts/{workflow-id}/test_data_validation.py
 ```
 
-三個檔案都是必要產物，不詢問使用者是否需要 mock data，也不開放指定筆數。Mock CSV 只包含
-反向資料，每列至少違反一條規則；基準為 100 筆，為覆蓋全部可產生的條件可增加至最多
-1000 筆。超過上限的案例會截斷，不阻擋 artifact 交付。
-
-Field-spec CSV 將全部屬性展開為 columns，每個資料欄位各占一 row，方便使用者後續比對。
-
-Agent 必須讀回驗證寫入內容，再以 workspace-relative path 呼叫 `complete_validation`。MCP
-Server 只記錄 path 與 delivery status。
+四個檔案都是必要產物。`validation_rules.json` 是人類確認過的規則契約；README 以中文摘要
+及分組表格呈現；runtime 提供 `validate(df)`；pytest 為每條規則提供 pass/fail case，另含空
+DataFrame shortcut，不含 execution-failure test。
 
 ## POC 限制
 
-- Workflow store 是單一 MCP 行程內的全域 map。
-- Server 或 container 重啟後資料會遺失，多個 replica 之間也不共享 state。
-- 尚未實作 workflow 過期、持久化、租戶隔離或具身分驗證的人工核准。
-- 此版本應使用單一 MCP replica；正式環境需改為共享持久化儲存。
-
-## 部署
-
-Agent Host 只需載入 `agent/skills/data-validation/`，並連線至 Data Validation MCP Server。
-不要再設定舊的 `SYSTEM_PROMPT.md` 或安裝四個 phase skills。
-
-部署後確認 Agent Host 能發現 `data-validation` Skill，以及 MCP Server 的 workflow tools。
+- Workflow store 是單一 MCP process 內的全域 map，重啟後遺失且 replica 間不共享。
+- 尚未實作持久化、workflow expiry、租戶隔離或具身分驗證的人工核准。
+- `examples.sql` 只供 review，不會執行；row-rule Python 由 Agent 按已確認語意產生，並通過
+  Server 的 AST 限制後才寫入 module。

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import csv
-import inspect
-import io
 import json
 import re
 
@@ -21,72 +18,136 @@ def empty_workflow_store() -> None:
     workflow_store.clear()
 
 
-def start_ready_workflow(monkeypatch: pytest.MonkeyPatch) -> str:
+def submitted_row_rule() -> dict:
+    return {
+        "id": "row.alt_required_when_code_empty",
+        "desc": "code 為空字串時，alt 不可為 null",
+        "columns": ["code", "alt"],
+        "examples": {
+            "pass": [{"name": "alt 有值", "sql": "code = '' AND alt IS NOT NULL"}],
+            "fail": [{"name": "alt 缺值", "sql": "code = '' AND alt IS NULL"}],
+        },
+    }
+
+
+def start_submitted_workflow(monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setattr(
         server,
         "fetch_table_schema",
-        lambda _urn: {"table": "orders", "fields": [{"name": "code"}]},
+        lambda _urn: {
+            "table": "orders",
+            "fields": [{"name": "code"}, {"name": "alt"}],
+        },
     )
     workflow_id = json.loads(server.start_validation(DATASET_URN))["workflow_id"]
     assert re.fullmatch(r"dva_\d{8}_[0-9a-z]{4}", workflow_id)
-    assert json.loads(server.get_table_schema(workflow_id))["table"] == "orders"
+    server.get_table_schema(workflow_id)
     assert json.loads(server.get_field_spec(workflow_id))["title"] == "field_spec"
-    result = json.loads(
-        server.submit_field_spec(
-            workflow_id, json.dumps(spec_document(string_field()))
+    field_spec = spec_document(
+        string_field(
+            "code",
+            nullable=False,
+            invalid_value_tokens=[],
+            allow_empty_string=True,
+        ),
+        string_field(
+            "alt",
+            nullable=True,
+            invalid_value_tokens=[],
+            allow_empty_string=True,
+        ),
+    )
+    submitted = json.loads(
+        server.submit_validation_rules(
+            workflow_id,
+            json.dumps(field_spec),
+            json.dumps([submitted_row_rule()]),
         )
     )
-    assert result["state"] == "awaiting_confirmation"
+    assert submitted["state"] == "awaiting_confirmation"
     return workflow_id
 
 
-def test_server_rejects_generator_before_confirmation(
+def test_server_rejects_artifact_before_combined_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow_id = start_ready_workflow(monkeypatch)
-
-    result = server.gen_validation_suite(workflow_id)
-
-    assert result.startswith("ERROR:")
-    assert json.loads(server.get_validation_state(workflow_id))["state"] == (
-        "awaiting_confirmation"
-    )
+    workflow_id = start_submitted_workflow(monkeypatch)
+    assert server.gen_validation_rules(workflow_id).startswith("ERROR:")
 
 
-def test_mock_tool_exposes_no_row_count_parameter() -> None:
-    assert list(inspect.signature(server.gen_mock_data).parameters) == ["workflow_id"]
-
-
-def test_server_runs_complete_confirmed_workflow(
+def test_pending_rules_include_col_and_row_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workflow_id = start_ready_workflow(monkeypatch)
-    assert json.loads(server.confirm_field_spec(workflow_id))["state"] == "confirmed"
+    workflow_id = start_submitted_workflow(monkeypatch)
+    rules = json.loads(server.get_submitted_validation_rules(workflow_id))
+    assert [rule["id"] for rule in rules["col_rules"]] == ["col.code.not_null"]
+    assert rules["row_rules"] == [submitted_row_rule()]
 
-    suite = json.loads(server.gen_validation_suite(workflow_id))
-    assert suite["name"] == "orders_validation_suite"
-    assert suite["meta"]["great_expectations_version"] == "1.18.2"
 
-    mock_rows = list(csv.DictReader(io.StringIO(server.gen_mock_data(workflow_id))))
-    assert len(mock_rows) == 100
+def test_server_runs_complete_validation_as_code_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_id = start_submitted_workflow(monkeypatch)
+    confirmed = json.loads(server.confirm_validation_rules(workflow_id))
+    assert confirmed["state"] == "confirmed"
 
-    field_spec_rows = list(
-        csv.DictReader(io.StringIO(server.gen_field_spec_csv(workflow_id)))
+    rules_text = server.gen_validation_rules(workflow_id)
+    rules = json.loads(rules_text)
+    assert len(rules["col_rules"]) == 1
+    assert len(rules["row_rules"]) == 1
+
+    readme = server.gen_readme(workflow_id)
+    assert "| 規則總數 | 2 |" in readme
+
+    data_validation = server.gen_data_validation(
+        workflow_id,
+        json.dumps(
+            [
+                {
+                    "id": "row.alt_required_when_code_empty",
+                    "body": (
+                        'condition = df["code"].eq("").fillna(False)\n'
+                        'return (~condition | df["alt"].notna()).fillna(False)'
+                    ),
+                }
+            ]
+        ),
     )
-    assert field_spec_rows[0]["name"] == "code"
+    compile(data_validation, "data_validation.py", "exec")
 
-    paths = {
-        "validation_suite": f"artifacts/{workflow_id}/orders_validation_suite.json",
-        "mock_data": f"artifacts/{workflow_id}/orders_mock.csv",
-        "field_spec": f"artifacts/{workflow_id}/orders_field_spec.csv",
-    }
+    tests = server.gen_test_data_validation(
+        workflow_id,
+        json.dumps(
+            [
+                {
+                    "id": "col.code.not_null",
+                    "pass_cases": [{"name": "有值", "rows": [{"code": "A"}]}],
+                    "fail_cases": [{"name": "缺值", "rows": [{"code": None}]}],
+                },
+                {
+                    "id": "row.alt_required_when_code_empty",
+                    "pass_cases": [
+                        {"name": "alt 有值", "rows": [{"code": "", "alt": "B"}]}
+                    ],
+                    "fail_cases": [
+                        {"name": "alt 缺值", "rows": [{"code": "", "alt": None}]}
+                    ],
+                },
+            ]
+        ),
+    )
+    compile(tests, "test_data_validation.py", "exec")
+    assert "execution_failure" not in tests
+
+    root = f"artifacts/{workflow_id}"
     completed = json.loads(
         server.complete_validation(
             workflow_id,
-            paths["validation_suite"],
-            paths["mock_data"],
-            paths["field_spec"],
+            f"{root}/validation_rules.json",
+            f"{root}/README.md",
+            f"{root}/data_validation.py",
+            f"{root}/test_data_validation.py",
         )
     )
     assert completed["state"] == "completed"
-    assert completed["delivered_artifacts"] == paths
+    assert len(completed["delivered_artifacts"]) == 4

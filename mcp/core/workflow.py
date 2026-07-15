@@ -11,10 +11,16 @@ from enum import Enum
 from typing import Any
 
 from .models import FieldSpec
+from .validation_rules import ValidationRules, canonical_validation_rules
 
 _WORKFLOW_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 _WORKFLOW_ID_SPACE = len(_WORKFLOW_ID_ALPHABET) ** 4
-_REQUIRED_ARTIFACTS = ("validation_suite", "mock_data", "field_spec")
+_REQUIRED_ARTIFACTS = (
+    "validation_rules",
+    "readme",
+    "data_validation",
+    "test_data_validation",
+)
 
 
 class WorkflowError(ValueError):
@@ -24,7 +30,7 @@ class WorkflowError(ValueError):
 class WorkflowState(str, Enum):
     awaiting_schema = "awaiting_schema"
     dataset_ready = "dataset_ready"
-    drafting_spec = "drafting_spec"
+    drafting_rules = "drafting_rules"
     awaiting_confirmation = "awaiting_confirmation"
     confirmed = "confirmed"
     generating_artifacts = "generating_artifacts"
@@ -93,6 +99,8 @@ class WorkflowStore:
                 "field_spec_contract_sha256": None,
                 "field_spec_json": None,
                 "field_spec_sha256": None,
+                "validation_rules_json": None,
+                "validation_rules_sha256": None,
                 "confirmation": None,
                 "generated_artifacts": {
                     artifact: False for artifact in _REQUIRED_ARTIFACTS
@@ -110,6 +118,7 @@ class WorkflowStore:
             record = self._require(workflow_id)
             snapshot = deepcopy(record)
         snapshot.pop("field_spec_json", None)
+        snapshot.pop("validation_rules_json", None)
         snapshot.pop("upstream_schema", None)
         return snapshot
 
@@ -134,7 +143,7 @@ class WorkflowStore:
     def contract_loaded(self, workflow_id: str, contract_text: str) -> dict[str, Any]:
         allowed = {
             WorkflowState.dataset_ready,
-            WorkflowState.drafting_spec,
+            WorkflowState.drafting_rules,
             WorkflowState.awaiting_confirmation,
             WorkflowState.confirmed,
             WorkflowState.generating_artifacts,
@@ -144,25 +153,45 @@ class WorkflowStore:
             self._require_state(record, *allowed)
             record["field_spec_contract_sha256"] = _sha256_text(contract_text)
             record["confirmation"] = None
+            record["validation_rules_json"] = None
+            record["validation_rules_sha256"] = None
             record["generated_artifacts"] = {
                 artifact: False for artifact in _REQUIRED_ARTIFACTS
             }
             record["delivered_artifacts"] = {}
-            self._transition(record, WorkflowState.drafting_spec, "contract_loaded")
+            self._transition(record, WorkflowState.drafting_rules, "contract_loaded")
             return self.snapshot(workflow_id)
 
-    def submit_spec(self, workflow_id: str, spec: FieldSpec) -> dict[str, Any]:
-        canonical = canonical_field_spec(spec)
+    def dataset_reference(self, workflow_id: str) -> str:
         with self._lock:
             record = self._require(workflow_id)
-            self._require_state(record, WorkflowState.drafting_spec)
+            self._require_state(record, WorkflowState.drafting_rules)
+            return str(record["dataset_urn"])
+
+    def submit_rules(
+        self,
+        workflow_id: str,
+        spec: FieldSpec,
+        rules: ValidationRules,
+    ) -> dict[str, Any]:
+        canonical_spec = canonical_field_spec(spec)
+        canonical_rules = canonical_validation_rules(rules)
+        with self._lock:
+            record = self._require(workflow_id)
+            self._require_state(record, WorkflowState.drafting_rules)
             if not record["field_spec_contract_sha256"]:
                 raise WorkflowError("尚未載入 field_spec 規格")
-            record["field_spec_json"] = canonical
-            record["field_spec_sha256"] = _sha256_text(canonical)
+            if rules.dataset.urn != record["dataset_urn"]:
+                raise WorkflowError("validation rules 的 dataset URN 與 workflow 不一致")
+            record["field_spec_json"] = canonical_spec
+            record["field_spec_sha256"] = _sha256_text(canonical_spec)
+            record["validation_rules_json"] = canonical_rules
+            record["validation_rules_sha256"] = _sha256_text(canonical_rules)
             record["confirmation"] = None
             self._transition(
-                record, WorkflowState.awaiting_confirmation, "field_spec_submitted"
+                record,
+                WorkflowState.awaiting_confirmation,
+                "validation_rules_submitted",
             )
             return self.snapshot(workflow_id)
 
@@ -171,14 +200,18 @@ class WorkflowStore:
             record = self._require(workflow_id)
             self._require_state(record, WorkflowState.awaiting_confirmation)
             spec_hash = record["field_spec_sha256"]
-            if not spec_hash:
-                raise WorkflowError("沒有可確認的 field_spec")
+            rules_hash = record["validation_rules_sha256"]
+            if not spec_hash or not rules_hash:
+                raise WorkflowError("沒有可確認的 col_rules 與 row_rules")
             record["confirmation"] = {
                 "field_spec_sha256": spec_hash,
+                "validation_rules_sha256": rules_hash,
                 "confirmed_at": _now(),
                 "confirmed_by": "human_via_agent",
             }
-            self._transition(record, WorkflowState.confirmed, "field_spec_confirmed")
+            self._transition(
+                record, WorkflowState.confirmed, "validation_rules_confirmed"
+            )
             return self.snapshot(workflow_id)
 
     def field_spec(self, workflow_id: str) -> FieldSpec:
@@ -193,12 +226,44 @@ class WorkflowStore:
             if (
                 not confirmation
                 or confirmation["field_spec_sha256"] != record["field_spec_sha256"]
+                or confirmation["validation_rules_sha256"]
+                != record["validation_rules_sha256"]
             ):
-                raise WorkflowError("目前 field_spec 尚未獲得有效確認")
+                raise WorkflowError("目前 col_rules 與 row_rules 尚未獲得有效確認")
             raw = record["field_spec_json"]
         if not raw:
             raise WorkflowError("workflow 沒有正式的 field_spec")
         return FieldSpec(**json.loads(raw))
+
+    def validation_rules(self, workflow_id: str) -> ValidationRules:
+        with self._lock:
+            record = self._require(workflow_id)
+            self._require_state(
+                record,
+                WorkflowState.confirmed,
+                WorkflowState.generating_artifacts,
+            )
+            confirmation = record["confirmation"]
+            if (
+                not confirmation
+                or confirmation["validation_rules_sha256"]
+                != record["validation_rules_sha256"]
+            ):
+                raise WorkflowError("目前 validation rules 尚未獲得有效確認")
+            raw = record["validation_rules_json"]
+        if not raw:
+            raise WorkflowError("workflow 沒有正式的 validation rules")
+        return ValidationRules(**json.loads(raw))
+
+    def pending_validation_rules(self, workflow_id: str) -> ValidationRules:
+        """只供人工確認畫面讀取已提交、尚未確認的完整規則。"""
+        with self._lock:
+            record = self._require(workflow_id)
+            self._require_state(record, WorkflowState.awaiting_confirmation)
+            raw = record["validation_rules_json"]
+        if not raw:
+            raise WorkflowError("workflow 沒有待確認的 validation rules")
+        return ValidationRules(**json.loads(raw))
 
     def artifact_generated(self, workflow_id: str, artifact: str) -> dict[str, Any]:
         if artifact not in _REQUIRED_ARTIFACTS:
@@ -219,20 +284,22 @@ class WorkflowStore:
             return self.snapshot(workflow_id)
 
     def expected_artifact_paths(self, workflow_id: str) -> dict[str, str]:
-        spec = self.field_spec(workflow_id)
+        self.validation_rules(workflow_id)
         root = f"artifacts/{workflow_id}"
         return {
-            "validation_suite": f"{root}/{spec.table_name}_validation_suite.json",
-            "mock_data": f"{root}/{spec.table_name}_mock.csv",
-            "field_spec": f"{root}/{spec.table_name}_field_spec.csv",
+            "validation_rules": f"{root}/validation_rules.json",
+            "readme": f"{root}/README.md",
+            "data_validation": f"{root}/data_validation.py",
+            "test_data_validation": f"{root}/test_data_validation.py",
         }
 
     def complete(
         self,
         workflow_id: str,
-        suite_path: str,
-        mock_path: str,
-        field_spec_path: str,
+        validation_rules_path: str,
+        readme_path: str,
+        data_validation_path: str,
+        test_data_validation_path: str,
     ) -> dict[str, Any]:
         with self._lock:
             record = self._require(workflow_id)
@@ -246,25 +313,19 @@ class WorkflowStore:
                 raise WorkflowError(f"尚未產生必要 artifacts：{', '.join(missing)}")
 
         expected = self.expected_artifact_paths(workflow_id)
-        if suite_path != expected["validation_suite"]:
-            raise WorkflowError(
-                f"suite_path 必須是 {expected['validation_suite']}"
-            )
-        if mock_path != expected["mock_data"]:
-            raise WorkflowError(f"mock_path 必須是 {expected['mock_data']}")
-        if field_spec_path != expected["field_spec"]:
-            raise WorkflowError(
-                f"field_spec_path 必須是 {expected['field_spec']}"
-            )
+        submitted = {
+            "validation_rules": validation_rules_path,
+            "readme": readme_path,
+            "data_validation": data_validation_path,
+            "test_data_validation": test_data_validation_path,
+        }
+        for artifact, path in submitted.items():
+            if path != expected[artifact]:
+                raise WorkflowError(f"{artifact}_path 必須是 {expected[artifact]}")
 
         with self._lock:
             record = self._require(workflow_id)
-            delivered = {
-                "validation_suite": suite_path,
-                "mock_data": mock_path,
-                "field_spec": field_spec_path,
-            }
-            record["delivered_artifacts"] = delivered
+            record["delivered_artifacts"] = submitted
             self._transition(record, WorkflowState.completed, "workflow_completed")
             return self.snapshot(workflow_id)
 

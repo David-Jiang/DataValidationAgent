@@ -1,40 +1,37 @@
 ---
 name: data-validation
-description: 統籌完整的 DataHub 資料表驗證流程，包含上游結構擷取、欄位規格定義、人工確認，以及固定交付 Great Expectations suite、全反向 mock data 與 field-spec CSV。當使用者呼叫 /data-validation、提供 DataHub dataset URN，或要求 data validate、資料驗證、資料表驗證、定義欄位驗證規則、建立反向測試資料或產生 Great Expectations validation suite 時使用。若需求相關但沒有 dataset URN，要求使用者提供。
+description: 統籌 DataHub 資料表的 validation-as-code 流程：取得上游 schema、依 field_spec 建立 column rules、討論 cross-field row rules、人工確認全部規則，並交付 validation_rules.json、中文 README、Pandas-native data_validation.py 與 pytest。使用者呼叫 /data-validation、提供 DataHub dataset URN，或要求資料驗證、欄位規則、跨欄位商業規則或 Airflow validation unit tests 時使用。若缺少 dataset URN，先要求使用者提供。
 ---
 
 # 資料驗證
 
-將此 Skill 作為資料驗證 workflow 的唯一入口。每次流程只保留一個
-`workflow_id`，並將它傳給所有 MCP 工具。未符合下列狀態機前置條件時，不可呼叫階段
-工具。
+將此 Skill 作為 workflow 的唯一入口；同一流程只使用一個 `workflow_id`。
 
 ## 必要流程
 
-1. 若使用者未提供 DataHub dataset URN，要求使用者提供，此時不要呼叫任何 MCP 工具。
-2. 讀取 [dataset-intake.md](references/dataset-intake.md)，呼叫
-   `start_validation(dataset_urn)`，保留回傳的 `workflow_id`，再完成 schema 接收。
-3. 讀取 [field-spec.md](references/field-spec.md)，完成 field spec 的討論與提交。
-4. 讀取 [confirmation-gate.md](references/confirmation-gate.md)，顯示 `workflow_id` 與完整的
-   已提交 spec。只有在使用者明確確認後，才可呼叫 `confirm_field_spec`。
-5. 讀取 [artifact-delivery.md](references/artifact-delivery.md)，產生必要的 validation suite
-   JSON、全反向 mock CSV 與 field-spec CSV，寫入使用者 workspace、完成驗證，並將 workflow
-   標記為完成。三個 artifacts 都是固定產物，不詢問使用者是否需要或需要多少 mock data。
+1. 缺少 DataHub dataset URN 時先向使用者索取，不呼叫 MCP tool。
+2. 讀取 [dataset-intake.md](references/dataset-intake.md)，建立 workflow 並取得 schema。
+3. 讀取 [field-spec.md](references/field-spec.md)，討論 field spec 所對應的 col rules，以及使用者
+   用自然語言、SQL 或其他方式表達的 row rules，再一併提交。
+4. 讀取 [confirmation-gate.md](references/confirmation-gate.md)，用分組、可展開的 tables 顯示
+   全部 col rules 與 row rules。只有使用者明確確認兩組規則後才呼叫
+   `confirm_validation_rules`。
+5. 讀取 [artifact-delivery.md](references/artifact-delivery.md)，產生、寫入、讀回並測試四個固定
+   artifacts，再將 workflow 標記完成。
 
-當狀態轉換遭拒、工具回傳 `ERROR:`、使用者變更 dataset 或已提交規則，或 workflow 必須
-恢復時，讀取 [state-machine.md](references/state-machine.md)。
+狀態被拒、工具回傳 `ERROR:`、規則被修改或 workflow 需要恢復時，讀取
+[state-machine.md](references/state-machine.md)。
 
 ## 不可違反的規則
 
-- 將 MCP workflow state 視為唯一事實來源。不可模擬、跳過或在本機覆寫 state。
-- `get_table_schema` 成功前，不可建立資料表專屬規則。
-- 草擬新 spec 前先呼叫 `get_field_spec`。已提交或確認後再次呼叫此工具，會刻意使舊的
-  確認紀錄與已產生 artifact 狀態失效。
-- 不可根據推測的同意呼叫 `confirm_field_spec`。只有完整、實際提交的 spec 已顯示，且使用者明確
-  回覆 `確認`、`可以`、`沒問題`、`confirm`、`confirmed` 或 `looks good` 等肯定語句時，
-  才可呼叫。
-- 不可將使用者或模型提供的 spec 直接傳入產生器。產生器只讀取 MCP Server 保存且已確認的
-  正式版 spec。
-- 任一工具回傳以 `ERROR:` 開頭時立即停止，說明錯誤並等待修正後的輸入或環境。修正後
-  檢查 workflow state，只有 state 為 `blocked` 時才呼叫 `resume_validation`。
-- 不可將 mock data 寫入資料庫。
+- MCP workflow state 是唯一事實來源；不可模擬或跳過 state。
+- `get_table_schema` 成功前不可建立 dataset-specific rules。
+- 每次規則修改循環前呼叫 `get_field_spec`；此動作會使舊 confirmation 與 artifact 狀態失效。
+- `row_rules` 每條只保存 `id`、`desc`、`columns`、`examples`；passing/failing example 都使用
+  `{"name": "...", "sql": "..."}`。SQL 只供人類 review，不可執行。
+- 不可把自然語言或 SQL 原文當成 Python 執行。row-rule implementation 必須依已確認語意重新
+  撰寫成 pure Pandas body，交由 Server 檢查。
+- 不可推測使用者已同意；必須完整顯示實際提交的 col/row rules 並收到明確肯定回覆。
+- 產生器只讀取 Server 保存且已確認的正式版 rules。
+- 工具回傳 `ERROR:` 時停止該流程並說明錯誤；只有 state 為 `blocked` 時才呼叫
+  `resume_validation`。
