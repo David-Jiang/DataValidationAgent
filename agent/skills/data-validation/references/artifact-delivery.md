@@ -5,10 +5,10 @@
 1. 呼叫 `gen_validation_rules(workflow_id)`。
 2. 呼叫 `gen_readme(workflow_id)`。
 3. 依每條已確認的 row rule 撰寫 pure Pandas function body，組成
-   `row_rule_functions_json` 後呼叫 `gen_data_validation`。不可直接執行或貼入使用者提供的
+   `row_impl_code_json` 後呼叫 `gen_data_validation`。不可直接執行或貼入使用者提供的
    SQL/Python 原文。
 4. 為每一條 col rule 與 row rule 準備至少一組 concrete `pass_cases` 與 `fail_cases`，組成
-   `rule_test_cases_json` 後呼叫 `gen_test_data_validation`。
+   `row_test_code_json` 後呼叫 `gen_test_data_validation`。
 5. 將回傳內容寫入：
 
    ```text

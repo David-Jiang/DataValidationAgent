@@ -1,5 +1,5 @@
 """
-field_spec 的 Pydantic 模型，作為 col_rules 的輸入與實作來源。
+field_spec 的 Pydantic 模型、JSON parser 與 dtype-specific validation。
 任何不符合此結構的 field_spec 都會在工具入口被拒絕，並回傳明確錯誤訊息。
 """
 from __future__ import annotations

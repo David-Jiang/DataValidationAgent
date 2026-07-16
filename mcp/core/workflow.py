@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from .models import FieldSpec
+from .field_spec import FieldSpec
 from .validation_rules import ValidationRules, canonical_validation_rules
 
 _WORKFLOW_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"

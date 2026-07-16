@@ -7,8 +7,8 @@ import pytest
 
 from conftest import spec_document, string_field
 from core import workflow as workflow_module
-from core.models import FieldSpec
-from core.validation_rules import build_validation_rules
+from core.field_spec import FieldSpec
+from core.rules import build_col_rules, build_validation_rules
 from core.workflow import WorkflowError, WorkflowState, WorkflowStore
 
 
@@ -27,7 +27,7 @@ def ready_for_confirmation(store: WorkflowStore):
     store.schema_loaded(workflow_id, {"table": "orders", "fields": []})
     store.contract_loaded(workflow_id, CONTRACT)
     spec = FieldSpec(**spec_document(string_field()))
-    rules = build_validation_rules(DATASET_URN, spec, [])
+    rules = build_validation_rules(DATASET_URN, spec, build_col_rules(spec), [])
     store.submit_rules(workflow_id, spec, rules)
     return workflow_id, spec, rules
 

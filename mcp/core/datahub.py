@@ -1,10 +1,11 @@
 """
-DataHub client:呼叫 DataHub GraphQL API 取得 dataset schema。
-Token 從環境變數讀取,不暴露給呼叫端(Claude)。
+DataHub integration：呼叫 GraphQL API 取得 dataset schema。
+Token 從環境變數讀取，不暴露給呼叫端（Agent）。
 """
 from __future__ import annotations
 
 import os
+
 import httpx
 
 DATAHUB_HOST = os.environ.get("DATAHUB_HOST", "")
@@ -38,7 +39,7 @@ class DataHubError(Exception):
 
 
 def fetch_table_schema(dataset_urn: str) -> dict:
-    """呼叫 DataHub API,回傳整理後的 schema 資訊。失敗時拋出 DataHubError。"""
+    """呼叫 DataHub API，回傳整理後的 schema；失敗時拋出 DataHubError。"""
     if not DATAHUB_HOST or not DATAHUB_TOKEN:
         raise DataHubError(
             "DataHub 連線設定不完整,請確認環境變數 DATAHUB_HOST 與 DATAHUB_TOKEN 已設定"
@@ -52,12 +53,13 @@ def fetch_table_schema(dataset_urn: str) -> dict:
             timeout=10,
         )
         resp.raise_for_status()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPStatusError as exc:
         raise DataHubError(
-            f"DataHub API 回傳錯誤 (status={e.response.status_code}): {e.response.text[:300]}"
-        ) from e
-    except httpx.RequestError as e:
-        raise DataHubError(f"無法連線到 DataHub API: {e}") from e
+            "DataHub API 回傳錯誤 "
+            f"(status={exc.response.status_code}): {exc.response.text[:300]}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise DataHubError(f"無法連線到 DataHub API: {exc}") from exc
 
     payload = resp.json()
     if "errors" in payload:
@@ -73,13 +75,13 @@ def fetch_table_schema(dataset_urn: str) -> dict:
         "description": (dataset.get("properties") or {}).get("description"),
         "fields": [
             {
-                "name": f["fieldPath"],
-                "type": f.get("type"),
-                "nativeType": f.get("nativeDataType"),
-                "description": f.get("description"),
-                "nullable": f.get("nullable"),
-                "isPartOfKey": f.get("isPartOfKey"),
+                "name": field["fieldPath"],
+                "type": field.get("type"),
+                "nativeType": field.get("nativeDataType"),
+                "description": field.get("description"),
+                "nullable": field.get("nullable"),
+                "isPartOfKey": field.get("isPartOfKey"),
             }
-            for f in fields
+            for field in fields
         ],
     }

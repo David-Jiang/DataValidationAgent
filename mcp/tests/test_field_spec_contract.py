@@ -14,7 +14,7 @@ from conftest import (
     spec_document,
     string_field,
 )
-from core.models import FieldSpec
+from core.field_spec import FieldSpec
 
 
 SCHEMA_PATH = Path(__file__).parents[1] / "core" / "schemas" / "field_spec.schema.json"

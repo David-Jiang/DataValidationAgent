@@ -13,8 +13,8 @@ from conftest import (
     spec_document,
     string_field,
 )
-from core import models
-from core.models import DType, FieldSpec, parse_field_spec
+from core import field_spec
+from core.field_spec import DType, FieldSpec, parse_field_spec
 
 
 def test_dtype_values_are_stable() -> None:
@@ -151,6 +151,6 @@ def test_parse_field_spec_does_not_hide_unexpected_internal_errors(
         def __init__(self, **_data) -> None:
             raise RuntimeError("unexpected")
 
-    monkeypatch.setattr(models, "FieldSpec", BrokenFieldSpec)
+    monkeypatch.setattr(field_spec, "FieldSpec", BrokenFieldSpec)
     with pytest.raises(RuntimeError, match="unexpected"):
-        models.parse_field_spec(json.dumps(spec_document(boolean_field())))
+        field_spec.parse_field_spec(json.dumps(spec_document(boolean_field())))

@@ -1,29 +1,45 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pandas as pd
-import pytest
-
 from conftest import int_field, spec_document, string_field
 from core.artifacts import (
-    RowRuleImplementation,
-    RuleFixture,
-    RuleTestCases,
     render_data_validation_module,
     render_readme,
     render_test_module,
     render_validation_rules_json,
 )
-from core.models import FieldSpec
-from core.validation_rules import ValidationRule, build_validation_rules
+from core.field_spec import FieldSpec
+from core.rules import build_col_rules, build_validation_rules
+from core.validation_rules import (
+    RuleFixture,
+    RuleTestCases,
+    ValidationRule,
+    build_impl_code,
+    build_test_code,
+)
 
 
 DATASET_URN = "urn:li:dataset:(urn:li:dataPlatform:hive,orders,PROD)"
+
+
+def test_public_renderers_accept_only_validation_rules() -> None:
+    renderers = (
+        render_validation_rules_json,
+        render_readme,
+        render_data_validation_module,
+        render_test_module,
+    )
+    assert all(
+        list(inspect.signature(renderer).parameters) == ["rules"]
+        for renderer in renderers
+    )
 
 
 def package_contract():
@@ -55,7 +71,20 @@ def package_contract():
             },
         }
     )
-    return spec, build_validation_rules(DATASET_URN, spec, [row_rule])
+    rules = build_validation_rules(
+        DATASET_URN, spec, build_col_rules(spec), [row_rule]
+    )
+    return spec, rules
+
+
+def render_data_validation(rules, spec, implementations) -> str:
+    impl_code = build_impl_code(rules, spec, json.dumps(implementations))
+    return render_data_validation_module(impl_code)
+
+
+def render_tests(rules, cases) -> str:
+    raw_json = json.dumps([case.model_dump(mode="json") for case in cases])
+    return render_test_module(build_test_code(rules, raw_json))
 
 
 def _load_module(path: Path):
@@ -86,17 +115,17 @@ def test_generated_validate_short_circuits_empty_and_partitions_nonempty_rows(
     tmp_path: Path,
 ) -> None:
     spec, rules = package_contract()
-    source = render_data_validation_module(
+    source = render_data_validation(
         rules,
         spec,
         [
-            RowRuleImplementation(
-                id="row.amount_required_when_status_paid",
-                body=(
+            {
+                "id": "row.amount_required_when_status_paid",
+                "body": (
                     'condition = df["status"].eq("PAID").fillna(False)\n'
                     'return (~condition | df["amount"].notna()).fillna(False)'
                 ),
-            )
+            }
         ],
     )
     module_path = tmp_path / "data_validation.py"
@@ -127,14 +156,14 @@ def test_generated_validate_turns_execution_failure_into_invalid_reason(
     tmp_path: Path,
 ) -> None:
     spec, rules = package_contract()
-    source = render_data_validation_module(
+    source = render_data_validation(
         rules,
         spec,
         [
-            RowRuleImplementation(
-                id="row.amount_required_when_status_paid",
-                body='return df["missing_column"].notna()',
-            )
+            {
+                "id": "row.amount_required_when_status_paid",
+                "body": 'return df["missing_column"].notna()',
+            }
         ],
     )
     path = tmp_path / "data_validation.py"
@@ -166,7 +195,7 @@ def test_test_module_has_pass_fail_rule_tests_but_no_execution_failure_test() ->
             ],
         ),
     ]
-    source = render_test_module(rules, cases)
+    source = render_tests(rules, cases)
     compile(source, "test_data_validation.py", "exec")
     assert "test_rule_pass_cases" in source
     assert "test_rule_fail_cases" in source
@@ -176,17 +205,17 @@ def test_test_module_has_pass_fail_rule_tests_but_no_execution_failure_test() ->
 
 def test_generated_package_pytest_runs_successfully(tmp_path: Path) -> None:
     spec, rules = package_contract()
-    data_validation_source = render_data_validation_module(
+    data_validation_source = render_data_validation(
         rules,
         spec,
         [
-            RowRuleImplementation(
-                id="row.amount_required_when_status_paid",
-                body=(
+            {
+                "id": "row.amount_required_when_status_paid",
+                "body": (
                     'condition = df["status"].eq("PAID").fillna(False)\n'
                     'return (~condition | df["amount"].notna()).fillna(False)'
                 ),
-            )
+            }
         ],
     )
     cases = [
@@ -209,7 +238,7 @@ def test_generated_package_pytest_runs_successfully(tmp_path: Path) -> None:
         data_validation_source, encoding="utf-8"
     )
     (tmp_path / "test_data_validation.py").write_text(
-        render_test_module(rules, cases), encoding="utf-8"
+        render_tests(rules, cases), encoding="utf-8"
     )
 
     result = subprocess.run(
@@ -220,33 +249,3 @@ def test_generated_package_pytest_runs_successfully(tmp_path: Path) -> None:
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_row_rule_python_rejects_file_io() -> None:
-    spec, rules = package_contract()
-    with pytest.raises(ValueError, match="不允許"):
-        render_data_validation_module(
-            rules,
-            spec,
-            [
-                RowRuleImplementation(
-                    id="row.amount_required_when_status_paid",
-                    body='pd.read_csv("secret.csv")\nreturn df["amount"].notna()',
-                )
-            ],
-        )
-
-
-def test_row_rule_python_rejects_dynamic_import() -> None:
-    spec, rules = package_contract()
-    with pytest.raises(ValueError, match="不允許"):
-        render_data_validation_module(
-            rules,
-            spec,
-            [
-                RowRuleImplementation(
-                    id="row.amount_required_when_status_paid",
-                    body='__import__("os").system("whoami")\nreturn df["amount"].notna()',
-                )
-            ],
-        )

@@ -6,11 +6,14 @@ import pytest
 from pydantic import ValidationError
 
 from conftest import int_field, spec_document, string_field
-from core.models import FieldSpec
+from core.field_spec import FieldSpec
+from core.rules import build_col_rules, build_validation_rules
 from core.validation_rules import (
+    RuleFixture,
+    RuleTestCases,
     ValidationRule,
-    build_validation_rules,
-    parse_row_rules,
+    build_impl_code,
+    build_test_code,
 )
 
 
@@ -49,7 +52,7 @@ def test_build_validation_rules_keeps_minimal_input_schema_and_splits_col_rules(
             ),
         )
     )
-    rules = build_validation_rules(DATASET_URN, spec, [])
+    rules = build_validation_rules(DATASET_URN, spec, build_col_rules(spec), [])
 
     document = rules.model_dump(mode="json", by_alias=True)
     assert document["input_schema"] == [
@@ -70,9 +73,34 @@ def test_build_validation_rules_keeps_minimal_input_schema_and_splits_col_rules(
     }
 
 
-def test_row_rules_keep_only_minimal_fields_and_sql_examples() -> None:
-    parsed = parse_row_rules(json.dumps([row_rule()]))
-    assert parsed[0].model_dump(mode="json", by_alias=True) == row_rule()
+def test_rendering_context_is_not_part_of_validation_rules_contract() -> None:
+    spec = FieldSpec(
+        **spec_document(
+            string_field(
+                "code",
+                nullable=False,
+                invalid_value_tokens=[],
+                allow_empty_string=True,
+            )
+        )
+    )
+    rules = build_validation_rules(DATASET_URN, spec, build_col_rules(spec), [])
+    implemented = build_impl_code(rules, spec, "[]")
+    test_case = RuleTestCases(
+        id="col.code.not_null",
+        pass_cases=[RuleFixture(name="有值", rows=[{"code": "A"}])],
+        fail_cases=[RuleFixture(name="缺值", rows=[{"code": None}])],
+    )
+    testable = build_test_code(
+        implemented,
+        json.dumps([test_case.model_dump(mode="json")]),
+    )
+
+    assert testable.implementation_bodies
+    assert testable.test_cases
+    document = testable.model_dump(mode="json", by_alias=True)
+    assert "implementation_bodies" not in document
+    assert "test_cases" not in document
 
 
 @pytest.mark.parametrize(
@@ -93,9 +121,4 @@ def test_validation_contract_rejects_invalid_row_rules(overrides: dict) -> None:
     )
     with pytest.raises(ValidationError):
         submitted = ValidationRule.model_validate(row_rule(**overrides))
-        build_validation_rules(DATASET_URN, spec, [submitted])
-
-
-def test_parse_row_rules_reports_invalid_json() -> None:
-    with pytest.raises(ValueError, match="不是合法的 JSON"):
-        parse_row_rules("{")
+        build_validation_rules(DATASET_URN, spec, build_col_rules(spec), [submitted])

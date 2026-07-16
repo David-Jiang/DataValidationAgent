@@ -1,14 +1,16 @@
-"""將已確認的 field spec 與動態 row rules 正規化為 validation_rules.json。"""
+"""ValidationRules contract 與 executable/test implementation mapping。"""
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
-from typing import Literal
+import textwrap
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
-from .models import DType, FieldSpec, FieldSpecField
+from .field_spec import DType, FieldSpec
 
 
 class DatasetRef(BaseModel):
@@ -55,7 +57,42 @@ class ValidationRule(BaseModel):
         return value
 
 
+class RowRuleImplementation(BaseModel):
+    """Agent 依已確認 row rule 語意撰寫的 pure Python function body。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^row\.[A-Za-z0-9_.-]+$")
+    body: str = Field(min_length=1)
+
+
+class RuleFixture(BaseModel):
+    """一組具名、非空的 concrete test rows。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    rows: list[dict[str, Any]] = Field(min_length=1)
+
+
+class RuleTestCases(BaseModel):
+    """一條 col/row rule 的 passing 與 failing fixtures。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^(col|row)\.[A-Za-z0-9_.-]+$")
+    pass_cases: list[RuleFixture] = Field(min_length=1)
+    fail_cases: list[RuleFixture] = Field(min_length=1)
+
+
 class ValidationRules(BaseModel):
+    """
+    正式 validation contract。
+
+    implementation_bodies 與 test_cases 是 artifact rendering context，刻意從 JSON/hash
+    serialization 排除，避免 executable code 與 concrete rows 汙染正式規則契約。
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     contract_version: Literal["1.0"] = "1.0"
@@ -63,6 +100,10 @@ class ValidationRules(BaseModel):
     input_schema: list[InputColumn] = Field(min_length=1)
     col_rules: list[ValidationRule]
     row_rules: list[ValidationRule]
+    implementation_bodies: dict[str, str] = Field(
+        default_factory=dict, exclude=True, repr=False
+    )
+    test_cases: list[RuleTestCases] = Field(default_factory=list, exclude=True, repr=False)
 
     @model_validator(mode="after")
     def validate_rule_contract(self) -> "ValidationRules":
@@ -89,6 +130,20 @@ class ValidationRules(BaseModel):
             if len(rule.columns) < 2:
                 raise ValueError(f"row rule 必須引用至少兩個欄位：{rule.id}")
             self._ensure_known_columns(rule, known)
+
+        expected_ids = set(ids)
+        if self.implementation_bodies:
+            _ensure_exact_ids(
+                "rule implementations",
+                expected_ids,
+                list(self.implementation_bodies),
+            )
+        if self.test_cases:
+            _ensure_exact_ids(
+                "rule test cases",
+                expected_ids,
+                [case.id for case in self.test_cases],
+            )
         return self
 
     @staticmethod
@@ -98,16 +153,14 @@ class ValidationRules(BaseModel):
             raise ValueError(f"rule {rule.id} 引用了不存在的欄位：{unknown}")
 
 
-def parse_row_rules(raw_json: str) -> list[ValidationRule]:
-    """解析 Agent 依使用者討論建立的 row rules。"""
-    try:
-        raw = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"row_rules_json 不是合法的 JSON：{exc}") from exc
-    try:
-        return TypeAdapter(list[ValidationRule]).validate_python(raw)
-    except Exception as exc:
-        raise ValueError(f"row_rules 格式不符合規範：{exc}") from exc
+def _ensure_exact_ids(label: str, expected: set[str], submitted: list[str]) -> None:
+    if len(submitted) != len(set(submitted)):
+        raise ValueError(f"{label} 不可包含重複 id")
+    actual = set(submitted)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ValueError(f"{label} 不完整；missing={missing}, extra={extra}")
 
 
 def _column_key(name: str) -> str:
@@ -118,188 +171,280 @@ def _column_key(name: str) -> str:
     return safe
 
 
-def _identifier(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
+def _rebuild_rules(rules: ValidationRules, **rendering_context: object) -> ValidationRules:
+    data = rules.model_dump(mode="python")
+    data["implementation_bodies"] = rules.implementation_bodies
+    data["test_cases"] = rules.test_cases
+    data.update(rendering_context)
+    return ValidationRules.model_validate(data)
 
 
-def _literal(value: object) -> str:
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def _examples(
-    pass_cases: list[tuple[str, str]], fail_cases: list[tuple[str, str]]
-) -> RuleExamples:
-    return RuleExamples.model_validate(
-        {
-            "pass": [{"name": name, "sql": sql} for name, sql in pass_cases],
-            "fail": [{"name": name, "sql": sql} for name, sql in fail_cases],
-        }
-    )
-
-
-def _rule(
-    field: FieldSpecField,
-    suffix: str,
-    desc: str,
-    pass_cases: list[tuple[str, str]],
-    fail_cases: list[tuple[str, str]],
-) -> ValidationRule:
-    return ValidationRule(
-        id=f"col.{_column_key(field.name)}.{suffix}",
-        desc=desc,
-        columns=[field.name],
-        examples=_examples(pass_cases, fail_cases),
-    )
-
-
-def build_col_rules(field_spec: FieldSpec) -> list[ValidationRule]:
-    """依既有 field_spec contract 將每個啟用條件拆成獨立 col rule。"""
-    rules: list[ValidationRule] = []
+def _build_col_rule_bodies(field_spec: FieldSpec) -> dict[str, str]:
+    bodies: dict[str, str] = {}
     for field in field_spec.fields:
-        column = _identifier(field.name)
+        key = _column_key(field.name)
+        column = repr(field.name)
+        prefix = f"col.{key}"
 
         if field.nullable is False:
-            rules.append(
-                _rule(
-                    field,
-                    "not_null",
-                    f"{field.name} 不可為 null",
-                    [("欄位有值", f"{column} IS NOT NULL")],
-                    [("欄位為 null", f"{column} IS NULL")],
-                )
-            )
+            bodies[f"{prefix}.not_null"] = f"return df[{column}].notna()"
 
         if field.invalid_value_tokens:
-            values = ", ".join(_literal(value) for value in field.invalid_value_tokens)
-            rules.append(
-                _rule(
-                    field,
-                    "not_invalid_token",
-                    f"{field.name} 不可使用無效值 token：{field.invalid_value_tokens}",
-                    [("不是無效值 token", f"{column} NOT IN ({values})")],
-                    [("是無效值 token", f"{column} IN ({values})")],
-                )
+            bodies[f"{prefix}.not_invalid_token"] = (
+                f"return ~df[{column}].isin({field.invalid_value_tokens!r})"
             )
 
         if field.dtype == DType.string:
             if field.unique:
-                rules.append(
-                    _rule(
-                        field,
-                        "unique",
-                        f"{field.name} 的非 null 值不可重複",
-                        [("值未重複", f"COUNT(*) OVER (PARTITION BY {column}) = 1")],
-                        [("值重複", f"COUNT(*) OVER (PARTITION BY {column}) > 1")],
-                    )
+                bodies[f"{prefix}.unique"] = "\n".join(
+                    [
+                        f"series = df[{column}]",
+                        "return series.isna() | ~series.duplicated(keep=False)",
+                    ]
                 )
             if field.allow_empty_string is False:
-                rules.append(
-                    _rule(
-                        field,
-                        "not_empty",
-                        f"{field.name} 不可為空字串或全空白",
-                        [("字串有內容", f"TRIM({column}) <> ''")],
-                        [("字串為空", f"TRIM({column}) = ''")],
-                    )
+                bodies[f"{prefix}.not_empty"] = "\n".join(
+                    [
+                        f"series = df[{column}]",
+                        'text = series.astype("string")',
+                        'return series.isna() | ~text.str.fullmatch(r"\\s*", na=False)',
+                    ]
                 )
             if field.enum_values:
-                values = ", ".join(_literal(value) for value in field.enum_values)
-                rules.append(
-                    _rule(
-                        field,
-                        "allowed_values",
-                        f"{field.name} 只能是：{field.enum_values}",
-                        [("值在允許清單", f"{column} IN ({values})")],
-                        [("值不在允許清單", f"{column} NOT IN ({values})")],
-                    )
+                bodies[f"{prefix}.allowed_values"] = "\n".join(
+                    [
+                        f"series = df[{column}]",
+                        f"return series.isna() | series.isin({field.enum_values!r})",
+                    ]
                 )
             if field.pattern:
-                pattern = _literal(field.pattern)
-                rules.append(
-                    _rule(
-                        field,
-                        "pattern",
-                        f"{field.name} 必須符合正規表示式：{field.pattern}",
-                        [("格式符合", f"REGEXP_LIKE({column}, {pattern})")],
-                        [("格式不符合", f"NOT REGEXP_LIKE({column}, {pattern})")],
-                    )
+                bodies[f"{prefix}.pattern"] = "\n".join(
+                    [
+                        f"series = df[{column}]",
+                        'text = series.astype("string")',
+                        f"return series.isna() | text.str.fullmatch({field.pattern!r}, na=False)",
+                    ]
                 )
 
         if field.dtype in {DType.int_, DType.float_} and (
             field.min_value is not None or field.max_value is not None
         ):
-            conditions: list[str] = []
-            failing: list[tuple[str, str]] = []
+            comparisons: list[str] = []
             if field.min_value is not None:
-                conditions.append(f"{column} >= {_literal(field.min_value)}")
-                failing.append(("小於下界", f"{column} < {_literal(field.min_value)}"))
+                comparisons.append(f"numeric.ge({field.min_value!r})")
             if field.max_value is not None:
-                conditions.append(f"{column} <= {_literal(field.max_value)}")
-                failing.append(("大於上界", f"{column} > {_literal(field.max_value)}"))
-            rules.append(
-                _rule(
-                    field,
-                    "range",
-                    f"{field.name} 必須符合範圍：" + " AND ".join(conditions),
-                    [("位於允許範圍", " AND ".join(conditions))],
-                    failing,
-                )
+                comparisons.append(f"numeric.le({field.max_value!r})")
+            bodies[f"{prefix}.range"] = "\n".join(
+                [
+                    f"series = df[{column}]",
+                    'numeric = pd.to_numeric(series, errors="coerce")',
+                    f"within = {' & '.join(comparisons)}",
+                    "return series.isna() | within.fillna(False)",
+                ]
             )
 
         if field.dtype == DType.datetime_ and (
             field.datetime_after is not None or field.datetime_before is not None
         ):
-            conditions = []
-            failing = []
+            comparisons = []
             if field.datetime_after is not None:
-                conditions.append(f"{column} >= {_literal(field.datetime_after)}")
-                failing.append(("早於下界", f"{column} < {_literal(field.datetime_after)}"))
-            if field.datetime_before is not None:
-                conditions.append(f"{column} <= {_literal(field.datetime_before)}")
-                failing.append(("晚於上界", f"{column} > {_literal(field.datetime_before)}"))
-            rules.append(
-                _rule(
-                    field,
-                    "datetime_range",
-                    f"{field.name} 必須符合時間範圍：" + " AND ".join(conditions),
-                    [("位於允許時間範圍", " AND ".join(conditions))],
-                    failing,
+                comparisons.append(
+                    f"parsed.ge(pd.to_datetime({field.datetime_after!r}, utc=True))"
                 )
+            if field.datetime_before is not None:
+                comparisons.append(
+                    f"parsed.le(pd.to_datetime({field.datetime_before!r}, utc=True))"
+                )
+            bodies[f"{prefix}.datetime_range"] = "\n".join(
+                [
+                    f"series = df[{column}]",
+                    'parsed = pd.to_datetime(series, errors="coerce", utc=True)',
+                    f"within = {' & '.join(comparisons)}",
+                    "return series.isna() | within.fillna(False)",
+                ]
             )
         if field.dtype == DType.datetime_ and field.expected_datetime_format:
-            format_literal = _literal(field.expected_datetime_format)
-            expression = f"TRY(DATE_PARSE({column}, {format_literal})) IS NOT NULL"
-            rules.append(
-                _rule(
-                    field,
-                    "datetime_format",
-                    f"{field.name} 必須符合 datetime 格式：{field.expected_datetime_format}",
-                    [("格式正確", expression)],
-                    [("格式錯誤", f"NOT ({expression})")],
-                )
+            bodies[f"{prefix}.datetime_format"] = "\n".join(
+                [
+                    f"series = df[{column}]",
+                    (
+                        'parsed = pd.to_datetime(series, errors="coerce", '
+                        f"format={field.expected_datetime_format!r})"
+                    ),
+                    "return series.isna() | parsed.notna()",
+                ]
             )
-    return rules
+    return bodies
 
 
-def build_validation_rules(
-    dataset_urn: str,
+_FORBIDDEN_AST = (
+    ast.AsyncFunctionDef,
+    ast.Await,
+    ast.ClassDef,
+    ast.Delete,
+    ast.Global,
+    ast.Import,
+    ast.ImportFrom,
+    ast.Lambda,
+    ast.Nonlocal,
+    ast.Raise,
+    ast.Try,
+    ast.While,
+    ast.With,
+    ast.Yield,
+    ast.YieldFrom,
+)
+_FORBIDDEN_NAMES = {
+    "__builtins__",
+    "__import__",
+    "breakpoint",
+    "compile",
+    "delattr",
+    "dir",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "help",
+    "input",
+    "locals",
+    "open",
+    "setattr",
+    "vars",
+}
+_FORBIDDEN_ATTRIBUTES = {
+    "eval",
+    "pipe",
+    "query",
+    "read_clipboard",
+    "read_csv",
+    "read_excel",
+    "read_feather",
+    "read_fwf",
+    "read_html",
+    "read_json",
+    "read_orc",
+    "read_parquet",
+    "read_pickle",
+    "read_sas",
+    "read_spss",
+    "read_sql",
+    "read_sql_query",
+    "read_sql_table",
+    "read_stata",
+    "read_table",
+    "read_xml",
+    "to_clipboard",
+    "to_csv",
+    "to_excel",
+    "to_feather",
+    "to_gbq",
+    "to_hdf",
+    "to_html",
+    "to_json",
+    "to_latex",
+    "to_markdown",
+    "to_orc",
+    "to_parquet",
+    "to_pickle",
+    "to_sql",
+    "to_stata",
+    "to_xml",
+}
+
+
+def validate_row_rule_body(rule_id: str, body: str) -> str:
+    """以 AST denylist 驗證 body，通過後回傳去除首尾空白的內容。"""
+    source = "def _generated_rule(df):\n" + textwrap.indent(body.strip(), "    ")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise ValueError(f"row rule {rule_id} 的 Python body 語法錯誤：{exc}") from exc
+
+    function = tree.body[0]
+    assert isinstance(function, ast.FunctionDef)
+    if not any(isinstance(node, ast.Return) for node in ast.walk(function)):
+        raise ValueError(f"row rule {rule_id} 必須 return boolean Series")
+
+    for node in ast.walk(function):
+        if node is function:
+            continue
+        if isinstance(node, _FORBIDDEN_AST) or isinstance(node, ast.FunctionDef):
+            raise ValueError(
+                f"row rule {rule_id} 包含不允許的 Python 語法：{type(node).__name__}"
+            )
+        if isinstance(node, ast.Name) and (
+            node.id.startswith("__") or node.id in _FORBIDDEN_NAMES
+        ):
+            raise ValueError(f"row rule {rule_id} 使用了不允許的名稱：{node.id}")
+        if isinstance(node, ast.Attribute) and (
+            node.attr.startswith("__") or node.attr in _FORBIDDEN_ATTRIBUTES
+        ):
+            raise ValueError(f"row rule {rule_id} 使用了不允許的屬性：{node.attr}")
+    return body.strip()
+
+
+def _parse_row_impl_code(raw_json: str) -> list[RowRuleImplementation]:
+    try:
+        raw = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"row_impl_code_json 不是合法的 JSON：{exc}") from exc
+    try:
+        return TypeAdapter(list[RowRuleImplementation]).validate_python(raw)
+    except Exception as exc:
+        raise ValueError(f"row implementation code 格式錯誤：{exc}") from exc
+
+
+def validated_row_rule_bodies(
+    expected_ids: set[str],
+    implementations: list[RowRuleImplementation],
+) -> dict[str, str]:
+    submitted_ids = [item.id for item in implementations]
+    _ensure_exact_ids("row rule implementations", expected_ids, submitted_ids)
+    return {
+        item.id: validate_row_rule_body(item.id, item.body) for item in implementations
+    }
+
+
+def build_impl_code(
+    rules: ValidationRules,
     field_spec: FieldSpec,
-    row_rules: list[ValidationRule],
+    row_impl_code_json: str,
 ) -> ValidationRules:
-    return ValidationRules(
-        dataset=DatasetRef(urn=dataset_urn, table_name=field_spec.table_name),
-        input_schema=[
-            InputColumn(name=field.name, dtype=field.dtype) for field in field_spec.fields
-        ],
-        col_rules=build_col_rules(field_spec),
-        row_rules=row_rules,
+    """解析、驗證並整合 col/row implementations，回傳可 render code 的 rules copy。"""
+    implementations = _parse_row_impl_code(row_impl_code_json)
+    col_bodies = _build_col_rule_bodies(field_spec)
+    expected_col_ids = {rule.id for rule in rules.col_rules}
+    _ensure_exact_ids("col rule implementations", expected_col_ids, list(col_bodies))
+
+    expected_row_ids = {rule.id for rule in rules.row_rules}
+    row_bodies = validated_row_rule_bodies(expected_row_ids, implementations)
+    return _rebuild_rules(
+        rules,
+        implementation_bodies={**col_bodies, **row_bodies},
     )
+
+
+def _parse_row_test_code(raw_json: str) -> list[RuleTestCases]:
+    try:
+        raw = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"row_test_code_json 不是合法的 JSON：{exc}") from exc
+    try:
+        return TypeAdapter(list[RuleTestCases]).validate_python(raw)
+    except Exception as exc:
+        raise ValueError(f"row test code 格式錯誤：{exc}") from exc
+
+
+def build_test_code(
+    rules: ValidationRules,
+    row_test_code_json: str,
+) -> ValidationRules:
+    """解析並驗證所有 col/row fixtures，回傳可 render pytest 的 rules copy。"""
+    test_cases = _parse_row_test_code(row_test_code_json)
+    expected_ids = {rule.id for rule in [*rules.col_rules, *rules.row_rules]}
+    _ensure_exact_ids("rule test cases", expected_ids, [case.id for case in test_cases])
+    return _rebuild_rules(rules, test_cases=test_cases)
 
 
 def canonical_validation_rules(rules: ValidationRules) -> str:

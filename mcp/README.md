@@ -1,8 +1,7 @@
 # Data Validation Agent — MCP Server
 
 此 MCP Server 將 DataHub schema、既有 `field_spec` 欄位模板與使用者討論出的跨欄位規則，
-整理成可確認、可移植的 validation-as-code package。執行層只依賴 Pandas，不再依賴
-Great Expectations。
+整理成可確認、可移植的 validation-as-code package。
 
 完整 Agent 流程請見 [Agent 套件 README](../agent/README.md)。
 
@@ -19,23 +18,34 @@ Great Expectations。
 `examples.sql` 是協助人類 review 的 boolean expression，Server 與產生的 runtime 都不會
 執行它，因此不會形成 SQL injection 執行路徑。
 
+## Core 模組責任
+
+| 模組                       | 責任                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------- |
+| `core/field_spec.py`       | 解析並驗證 field spec 與各 dtype 的 column-specific 欄位                              |
+| `core/rules.py`            | 建立 col rules、解析 row rules，並產生完整 semantic `ValidationRules`                 |
+| `core/validation_rules.py` | 驗證 row rule 實作，並依 `ValidationRules` 產生 Pandas 驗證程式碼與 pytest 測試程式碼 |
+| `core/artifacts.py`        | 只接受 `ValidationRules`，render 四項 artifact 內容                                   |
+| `core/datahub.py`          | 查詢 DataHub GraphQL API 並正規化 dataset schema                                      |
+| `core/workflow.py`         | 管理 workflow state、confirmation hash、artifact 狀態與歷程                           |
+
 ## Workflow 工具
 
-| 工具 | 功能 |
-| --- | --- |
-| `start_validation` | 建立 workflow 並回傳 `workflow_id` |
-| `get_validation_state` | 讀取 state、hash、事件與 artifact 狀態 |
-| `get_table_schema` | 依 workflow 保存的 URN 查詢 DataHub |
-| `get_field_spec` | 回傳 col-rule 模板並進入 `drafting_rules` |
-| `submit_validation_rules` | 驗證 field spec、建立 col rules 並保存 row rules |
-| `get_submitted_validation_rules` | 取得待確認的完整 col/row rules |
-| `confirm_validation_rules` | 記錄完整 rules 與 field spec 的人工確認 hash |
-| `gen_validation_rules` | 產生 `validation_rules.json` |
-| `gen_readme` | 產生中文規則摘要與分組表格 |
-| `gen_data_validation` | 產生 Pandas-native `data_validation.py` |
-| `gen_test_data_validation` | 產生每條規則皆有 pass/fail case 的 pytest |
-| `complete_validation` | 四個檔案寫入、讀回並通過 pytest 後登記完成 |
-| `resume_validation` | 修正作業錯誤後恢復 blocked workflow |
+| 工具                             | 功能                                             |
+| -------------------------------- | ------------------------------------------------ |
+| `start_validation`               | 建立 workflow 並回傳 `workflow_id`               |
+| `get_validation_state`           | 讀取 state、hash、事件與 artifact 狀態           |
+| `get_table_schema`               | 依 workflow 保存的 URN 查詢 DataHub              |
+| `get_field_spec`                 | 回傳 col-rule 模板並進入 `drafting_rules`        |
+| `submit_validation_rules`        | 驗證 field spec、建立 col rules 並保存 row rules |
+| `get_submitted_validation_rules` | 取得待確認的完整 col/row rules                   |
+| `confirm_validation_rules`       | 記錄完整 rules 與 field spec 的人工確認 hash     |
+| `gen_validation_rules`           | 產生 `validation_rules.json`                     |
+| `gen_readme`                     | 產生中文規則摘要與分組表格                       |
+| `gen_data_validation`            | 產生 Pandas-native `data_validation.py`          |
+| `gen_test_data_validation`       | 產生每條規則皆有 pass/fail case 的 pytest        |
+| `complete_validation`            | 四個檔案寫入、讀回並通過 pytest 後登記完成       |
+| `resume_validation`              | 修正作業錯誤後恢復 blocked workflow              |
 
 Artifact generators 只讀取 Server 內已提交且已確認的 field spec 與 validation rules。重新
 呼叫 `get_field_spec` 會使舊 confirmation 與 artifact 狀態失效。

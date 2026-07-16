@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from core.models import FieldSpec
+from core.field_spec import FieldSpec
 
 
 COMMON_FIELD: dict[str, Any] = {

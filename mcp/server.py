@@ -10,12 +10,13 @@ from core import (
     DataHubError,
     WorkflowError,
     WorkflowState,
+    build_col_rules,
+    build_impl_code,
+    build_test_code,
     build_validation_rules,
     fetch_table_schema,
     parse_field_spec,
-    parse_row_rule_implementations,
     parse_row_rules,
-    parse_rule_test_cases,
     render_data_validation_module,
     render_readme,
     render_test_module,
@@ -134,9 +135,10 @@ def submit_validation_rules(
     """
     try:
         spec = parse_field_spec(field_spec_json)
+        col_rules = build_col_rules(spec)
         row_rules = parse_row_rules(row_rules_json)
         dataset_urn = workflow_store.dataset_reference(workflow_id)
-        rules = build_validation_rules(dataset_urn, spec, row_rules)
+        rules = build_validation_rules(dataset_urn, spec, col_rules, row_rules)
         return _json(workflow_store.submit_rules(workflow_id, spec, rules))
     except (WorkflowError, ValueError) as exc:
         return f"ERROR: {exc}"
@@ -167,8 +169,6 @@ def confirm_validation_rules(workflow_id: str) -> str:
         return _json(workflow_store.confirm(workflow_id))
     except WorkflowError as exc:
         return f"ERROR: {exc}"
-
-
 @mcp.tool()
 def gen_validation_rules(workflow_id: str) -> str:
     """產生 artifacts/{workflow_id}/validation_rules.json。"""
@@ -203,7 +203,7 @@ def gen_readme(workflow_id: str) -> str:
 
 
 @mcp.tool()
-def gen_data_validation(workflow_id: str, row_rule_functions_json: str) -> str:
+def gen_data_validation(workflow_id: str, row_impl_code_json: str) -> str:
     """
     產生 Pandas-native data_validation.py。Agent 必須依已確認 row rules 提供每條 row rule 的
     pure Python function body；禁止直接使用使用者提供的 SQL/Python 原文。
@@ -212,8 +212,8 @@ def gen_data_validation(workflow_id: str, row_rule_functions_json: str) -> str:
         resume_state = _state(workflow_id)
         rules = workflow_store.validation_rules(workflow_id)
         spec = workflow_store.field_spec(workflow_id)
-        implementations = parse_row_rule_implementations(row_rule_functions_json)
-        content = render_data_validation_module(rules, spec, implementations)
+        impl_code = build_impl_code(rules, spec, row_impl_code_json)
+        content = render_data_validation_module(impl_code)
         workflow_store.artifact_generated(workflow_id, "data_validation")
         return content
     except (WorkflowError, ValueError) as exc:
@@ -225,7 +225,7 @@ def gen_data_validation(workflow_id: str, row_rule_functions_json: str) -> str:
 
 
 @mcp.tool()
-def gen_test_data_validation(workflow_id: str, rule_test_cases_json: str) -> str:
+def gen_test_data_validation(workflow_id: str, row_test_code_json: str) -> str:
     """
     產生 pytest；每條 col/row rule 都必須提供至少一組 concrete passing 與 failing rows。
     不產生 execution failure tests，但會驗證空 DataFrame 直接回傳兩個空 DataFrame。
@@ -233,8 +233,8 @@ def gen_test_data_validation(workflow_id: str, rule_test_cases_json: str) -> str
     try:
         resume_state = _state(workflow_id)
         rules = workflow_store.validation_rules(workflow_id)
-        test_cases = parse_rule_test_cases(rule_test_cases_json)
-        content = render_test_module(rules, test_cases)
+        test_code = build_test_code(rules, row_test_code_json)
+        content = render_test_module(test_code)
         workflow_store.artifact_generated(workflow_id, "test_data_validation")
         return content
     except (WorkflowError, ValueError) as exc:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import re
 
@@ -11,6 +12,17 @@ from core import workflow_store
 
 
 DATASET_URN = "urn:li:dataset:(urn:li:dataPlatform:hive,orders,PROD)"
+
+
+def test_generation_tool_parameter_names_are_stable() -> None:
+    assert list(inspect.signature(server.gen_data_validation).parameters) == [
+        "workflow_id",
+        "row_impl_code_json",
+    ]
+    assert list(inspect.signature(server.gen_test_data_validation).parameters) == [
+        "workflow_id",
+        "row_test_code_json",
+    ]
 
 
 @pytest.fixture(autouse=True)

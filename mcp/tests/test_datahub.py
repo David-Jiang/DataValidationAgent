@@ -5,8 +5,8 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from core import datahub_client
-from core.datahub_client import DataHubError
+from core import datahub
+from core.datahub import DataHubError
 
 
 DATASET_URN = "urn:li:dataset:(urn:li:dataPlatform:hive,orders,PROD)"
@@ -14,8 +14,8 @@ DATASET_URN = "urn:li:dataset:(urn:li:dataPlatform:hive,orders,PROD)"
 
 @pytest.fixture(autouse=True)
 def configured_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(datahub_client, "DATAHUB_HOST", "https://datahub.example")
-    monkeypatch.setattr(datahub_client, "DATAHUB_TOKEN", "secret-token")
+    monkeypatch.setattr(datahub, "DATAHUB_HOST", "https://datahub.example")
+    monkeypatch.setattr(datahub, "DATAHUB_TOKEN", "secret-token")
 
 
 def response(payload: dict, status_code: int = 200, text: str = "") -> Mock:
@@ -39,12 +39,12 @@ def test_missing_connection_settings_fail_before_request(
     monkeypatch: pytest.MonkeyPatch, host: str, token: str
 ) -> None:
     post = Mock()
-    monkeypatch.setattr(datahub_client, "DATAHUB_HOST", host)
-    monkeypatch.setattr(datahub_client, "DATAHUB_TOKEN", token)
-    monkeypatch.setattr(datahub_client.httpx, "post", post)
+    monkeypatch.setattr(datahub, "DATAHUB_HOST", host)
+    monkeypatch.setattr(datahub, "DATAHUB_TOKEN", token)
+    monkeypatch.setattr(datahub.httpx, "post", post)
 
     with pytest.raises(DataHubError, match="連線設定不完整"):
-        datahub_client.fetch_table_schema(DATASET_URN)
+        datahub.fetch_table_schema(DATASET_URN)
     post.assert_not_called()
 
 
@@ -73,9 +73,9 @@ def test_success_maps_dataset_and_request(monkeypatch: pytest.MonkeyPatch) -> No
             }
         )
     )
-    monkeypatch.setattr(datahub_client.httpx, "post", post)
+    monkeypatch.setattr(datahub.httpx, "post", post)
 
-    result = datahub_client.fetch_table_schema(DATASET_URN)
+    result = datahub.fetch_table_schema(DATASET_URN)
 
     assert result == {
         "table": "orders",
@@ -110,11 +110,11 @@ def test_missing_optional_metadata_returns_empty_values(
     monkeypatch: pytest.MonkeyPatch, dataset: dict
 ) -> None:
     monkeypatch.setattr(
-        datahub_client.httpx,
+        datahub.httpx,
         "post",
         Mock(return_value=response({"data": {"dataset": dataset}})),
     )
-    assert datahub_client.fetch_table_schema(DATASET_URN) == {
+    assert datahub.fetch_table_schema(DATASET_URN) == {
         "table": "orders",
         "description": None,
         "fields": [],
@@ -124,12 +124,12 @@ def test_missing_optional_metadata_returns_empty_values(
 def test_http_error_is_wrapped_and_body_is_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
     body = "x" * 400
     monkeypatch.setattr(
-        datahub_client.httpx,
+        datahub.httpx,
         "post",
         Mock(return_value=response({}, status_code=503, text=body)),
     )
     with pytest.raises(DataHubError) as exc_info:
-        datahub_client.fetch_table_schema(DATASET_URN)
+        datahub.fetch_table_schema(DATASET_URN)
     message = str(exc_info.value)
     assert "status=503" in message
     assert "x" * 300 in message
@@ -139,30 +139,30 @@ def test_http_error_is_wrapped_and_body_is_truncated(monkeypatch: pytest.MonkeyP
 def test_request_error_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     request = httpx.Request("POST", "https://datahub.example/api/graphql")
     monkeypatch.setattr(
-        datahub_client.httpx,
+        datahub.httpx,
         "post",
         Mock(side_effect=httpx.ConnectError("offline", request=request)),
     )
     with pytest.raises(DataHubError, match="無法連線.*offline"):
-        datahub_client.fetch_table_schema(DATASET_URN)
+        datahub.fetch_table_schema(DATASET_URN)
 
 
 def test_graphql_error_is_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        datahub_client.httpx,
+        datahub.httpx,
         "post",
         Mock(return_value=response({"errors": [{"message": "forbidden"}]})),
     )
     with pytest.raises(DataHubError, match="GraphQL 回傳錯誤.*forbidden"):
-        datahub_client.fetch_table_schema(DATASET_URN)
+        datahub.fetch_table_schema(DATASET_URN)
 
 
 @pytest.mark.parametrize("payload", [{"data": {"dataset": None}}, {"data": {}}, {}])
 def test_missing_dataset_is_wrapped(monkeypatch: pytest.MonkeyPatch, payload: dict) -> None:
     monkeypatch.setattr(
-        datahub_client.httpx,
+        datahub.httpx,
         "post",
         Mock(return_value=response(payload)),
     )
     with pytest.raises(DataHubError, match="找不到 dataset"):
-        datahub_client.fetch_table_schema(DATASET_URN)
+        datahub.fetch_table_schema(DATASET_URN)

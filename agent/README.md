@@ -58,8 +58,8 @@ SQL 或其他方式提出的 row rule，也必須正規化、提交及顯示後�
 | 6 | 使用者明確確認後執行 `confirm_validation_rules(workflow_id)` |
 | 7 | `gen_validation_rules(workflow_id)` |
 | 8 | `gen_readme(workflow_id)` |
-| 9 | `gen_data_validation(workflow_id, row_rule_functions_json)` |
-| 10 | `gen_test_data_validation(workflow_id, rule_test_cases_json)` |
+| 9 | `gen_data_validation(workflow_id, row_impl_code_json)` |
+| 10 | `gen_test_data_validation(workflow_id, row_test_code_json)` |
 | 11 | 寫入、讀回、執行 pytest，再呼叫 `complete_validation(...)` |
 
 ## Artifact 交付
