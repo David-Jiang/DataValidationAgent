@@ -21,6 +21,8 @@ _REQUIRED_ARTIFACTS = (
     "data_validation",
     "test_data_validation",
 )
+_MAX_PYTEST_ATTEMPTS = 5
+_MAX_PYTEST_EVIDENCE_LENGTH = 20_000
 
 
 class WorkflowError(ValueError):
@@ -44,6 +46,15 @@ def _now() -> str:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _require_sha256(value: str, label: str) -> str:
+    if not isinstance(value, str):
+        raise WorkflowError(f"{label} 必須是 64 字元 SHA-256 hex digest")
+    value = value.strip().lower()
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise WorkflowError(f"{label} 必須是 64 字元 SHA-256 hex digest")
+    return value
 
 
 def _workflow_date() -> str:
@@ -105,6 +116,16 @@ class WorkflowStore:
                 "generated_artifacts": {
                     artifact: False for artifact in _REQUIRED_ARTIFACTS
                 },
+                "artifact_sha256": {
+                    artifact: None for artifact in _REQUIRED_ARTIFACTS
+                },
+                "pytest_verification": {
+                    "passed": False,
+                    "attempts": [],
+                    "data_validation_sha256": None,
+                    "test_data_validation_sha256": None,
+                    "verified_at": None,
+                },
                 "delivered_artifacts": {},
                 "blocked": None,
                 "history": [],
@@ -157,6 +178,16 @@ class WorkflowStore:
             record["validation_rules_sha256"] = None
             record["generated_artifacts"] = {
                 artifact: False for artifact in _REQUIRED_ARTIFACTS
+            }
+            record["artifact_sha256"] = {
+                artifact: None for artifact in _REQUIRED_ARTIFACTS
+            }
+            record["pytest_verification"] = {
+                "passed": False,
+                "attempts": [],
+                "data_validation_sha256": None,
+                "test_data_validation_sha256": None,
+                "verified_at": None,
             }
             record["delivered_artifacts"] = {}
             self._transition(record, WorkflowState.drafting_rules, "contract_loaded")
@@ -265,9 +296,15 @@ class WorkflowStore:
             raise WorkflowError("workflow 沒有待確認的 validation rules")
         return ValidationRules(**json.loads(raw))
 
-    def artifact_generated(self, workflow_id: str, artifact: str) -> dict[str, Any]:
+    def artifact_generated(
+        self,
+        workflow_id: str,
+        artifact: str,
+        content_sha256: str,
+    ) -> dict[str, Any]:
         if artifact not in _REQUIRED_ARTIFACTS:
             raise WorkflowError(f"未知的 artifact：{artifact}")
+        content_sha256 = _require_sha256(content_sha256, f"{artifact} content_sha256")
         with self._lock:
             record = self._require(workflow_id)
             self._require_state(
@@ -275,12 +312,102 @@ class WorkflowStore:
                 WorkflowState.confirmed,
                 WorkflowState.generating_artifacts,
             )
+            previous = record["artifact_sha256"][artifact]
+            if artifact == "data_validation" and previous and previous != content_sha256:
+                raise WorkflowError(
+                    "data_validation.py 已凍結；pytest repair loop 不可重新產生或修改 production artifact"
+                )
             record["generated_artifacts"][artifact] = True
+            record["artifact_sha256"][artifact] = content_sha256
+            if artifact in {"data_validation", "test_data_validation"}:
+                record["pytest_verification"]["passed"] = False
+                record["pytest_verification"]["verified_at"] = None
             self._transition(
                 record,
                 WorkflowState.generating_artifacts,
                 f"{artifact}_generated",
             )
+            return self.snapshot(workflow_id)
+
+    def record_pytest_result(
+        self,
+        workflow_id: str,
+        data_validation_sha256: str,
+        test_data_validation_sha256: str,
+        return_code: int,
+        pytest_command: str,
+        pytest_output: str,
+    ) -> dict[str, Any]:
+        data_validation_sha256 = _require_sha256(
+            data_validation_sha256, "data_validation_sha256"
+        )
+        test_data_validation_sha256 = _require_sha256(
+            test_data_validation_sha256, "test_data_validation_sha256"
+        )
+        if isinstance(return_code, bool) or not isinstance(return_code, int):
+            raise WorkflowError("return_code 必須是整數")
+        if not isinstance(pytest_command, str) or not pytest_command.strip():
+            raise WorkflowError("pytest_command 不可為空")
+        if not isinstance(pytest_output, str):
+            raise WorkflowError("pytest_output 必須是字串")
+
+        with self._lock:
+            record = self._require(workflow_id)
+            self._require_state(record, WorkflowState.generating_artifacts)
+            missing = [
+                artifact
+                for artifact in _REQUIRED_ARTIFACTS
+                if not record["generated_artifacts"][artifact]
+            ]
+            if missing:
+                raise WorkflowError(
+                    f"pytest 前尚未產生必要 artifacts：{', '.join(missing)}"
+                )
+            frozen_hash = record["artifact_sha256"]["data_validation"]
+            if data_validation_sha256 != frozen_hash:
+                raise WorkflowError(
+                    "data_validation.py hash 與 Server 凍結版本不一致；"
+                    "pytest repair loop 只能修改 test_data_validation.py"
+                )
+
+            evidence = {
+                "attempt": len(record["pytest_verification"]["attempts"]) + 1,
+                "return_code": return_code,
+                "pytest_command": pytest_command[:2_000],
+                "pytest_output": pytest_output[-_MAX_PYTEST_EVIDENCE_LENGTH:],
+                "data_validation_sha256": data_validation_sha256,
+                "test_data_validation_sha256": test_data_validation_sha256,
+                "recorded_at": _now(),
+            }
+            verification = record["pytest_verification"]
+            verification["attempts"].append(evidence)
+            verification["passed"] = return_code == 0
+            verification["data_validation_sha256"] = data_validation_sha256
+            verification["test_data_validation_sha256"] = test_data_validation_sha256
+            verification["verified_at"] = _now() if return_code == 0 else None
+            record["artifact_sha256"][
+                "test_data_validation"
+            ] = test_data_validation_sha256
+            record["updated_at"] = _now()
+            self._append_event(
+                record, "pytest_passed" if return_code == 0 else "pytest_failed"
+            )
+
+            consecutive_failures = 0
+            for attempt in reversed(verification["attempts"]):
+                if attempt["return_code"] == 0:
+                    break
+                consecutive_failures += 1
+            if return_code != 0 and consecutive_failures >= _MAX_PYTEST_ATTEMPTS:
+                record["blocked"] = {
+                    "error": (
+                        f"pytest 連續 {_MAX_PYTEST_ATTEMPTS} 次未通過；"
+                        "data_validation.py 保持凍結，需人工判斷 production implementation"
+                    ),
+                    "resume_state": WorkflowState.generating_artifacts.value,
+                    "blocked_at": _now(),
+                }
+                self._transition(record, WorkflowState.blocked, "pytest_attempts_exhausted")
             return self.snapshot(workflow_id)
 
     def expected_artifact_paths(self, workflow_id: str) -> dict[str, str]:
@@ -300,7 +427,15 @@ class WorkflowStore:
         readme_path: str,
         data_validation_path: str,
         test_data_validation_path: str,
+        data_validation_sha256: str,
+        test_data_validation_sha256: str,
     ) -> dict[str, Any]:
+        data_validation_sha256 = _require_sha256(
+            data_validation_sha256, "data_validation_sha256"
+        )
+        test_data_validation_sha256 = _require_sha256(
+            test_data_validation_sha256, "test_data_validation_sha256"
+        )
         with self._lock:
             record = self._require(workflow_id)
             self._require_state(record, WorkflowState.generating_artifacts)
@@ -311,6 +446,19 @@ class WorkflowStore:
             ]
             if missing:
                 raise WorkflowError(f"尚未產生必要 artifacts：{', '.join(missing)}")
+            verification = record["pytest_verification"]
+            if not verification["passed"]:
+                raise WorkflowError("尚未記錄成功的使用者環境 pytest 結果")
+            if data_validation_sha256 != record["artifact_sha256"]["data_validation"]:
+                raise WorkflowError("data_validation.py hash 與 Server 凍結版本不一致")
+            if data_validation_sha256 != verification["data_validation_sha256"]:
+                raise WorkflowError("data_validation.py hash 與 pytest 通過時版本不一致")
+            if test_data_validation_sha256 != record["artifact_sha256"][
+                "test_data_validation"
+            ]:
+                raise WorkflowError("test_data_validation.py hash 與目前 artifact 版本不一致")
+            if test_data_validation_sha256 != verification["test_data_validation_sha256"]:
+                raise WorkflowError("test_data_validation.py hash 與 pytest 通過時版本不一致")
 
         expected = self.expected_artifact_paths(workflow_id)
         submitted = {

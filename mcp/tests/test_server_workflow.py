@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import re
@@ -22,6 +23,14 @@ def test_generation_tool_parameter_names_are_stable() -> None:
     assert list(inspect.signature(server.gen_test_data_validation).parameters) == [
         "workflow_id",
         "row_test_code_json",
+    ]
+    assert list(inspect.signature(server.record_pytest_result).parameters) == [
+        "workflow_id",
+        "data_validation_sha256",
+        "test_data_validation_sha256",
+        "return_code",
+        "pytest_command",
+        "pytest_output",
     ]
 
 
@@ -151,6 +160,20 @@ def test_server_runs_complete_validation_as_code_workflow(
     compile(tests, "test_data_validation.py", "exec")
     assert "execution_failure" not in tests
 
+    data_hash = hashlib.sha256(data_validation.encode("utf-8")).hexdigest()
+    test_hash = hashlib.sha256(tests.encode("utf-8")).hexdigest()
+    verified = json.loads(
+        server.record_pytest_result(
+            workflow_id,
+            data_hash,
+            test_hash,
+            0,
+            "python -m pytest -q test_data_validation.py",
+            "2 passed",
+        )
+    )
+    assert verified["pytest_verification"]["passed"] is True
+
     root = f"artifacts/{workflow_id}"
     completed = json.loads(
         server.complete_validation(
@@ -159,6 +182,8 @@ def test_server_runs_complete_validation_as_code_workflow(
             f"{root}/README.md",
             f"{root}/data_validation.py",
             f"{root}/test_data_validation.py",
+            data_hash,
+            test_hash,
         )
     )
     assert completed["state"] == "completed"
