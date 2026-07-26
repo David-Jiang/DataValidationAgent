@@ -1,14 +1,12 @@
 import json
+import os
 import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from dotenv import dotenv_values
 
-CONFIG = dotenv_values()
-
-TRINO_URL = CONFIG.get("TRINO_URL")
-TRINO_USER = CONFIG.get("TRINO_USER")
-SQL = CONFIG.get("TRINO_SQL")
+TRINO_URL = os.environ.get("TRINO_URL", "http://localhost:18080")
+TRINO_USER = os.environ.get("TRINO_USER", "poc_user")
+SQL = os.environ.get("TRINO_SQL")
 
 
 def trino_request(url, method="GET", body=None):
@@ -55,9 +53,13 @@ def run_query(sql):
 
 
 def main():
+    if not SQL:
+        raise SystemExit("TRINO_SQL environment variable is required")
+
     columns, rows = run_query(SQL)
     headers = [column["name"] for column in columns]
-    print("\t".join(headers))
+    if headers:
+        print("\t".join(headers))
     for row in rows:
         print("\t".join("" if value is None else str(value) for value in row))
 

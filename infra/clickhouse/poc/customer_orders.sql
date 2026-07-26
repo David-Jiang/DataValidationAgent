@@ -1,3 +1,4 @@
+-- Initializes poc.customer_orders.
 CREATE DATABASE IF NOT EXISTS poc COMMENT 'POC catalog database for local data validation demos.';
 
 CREATE TABLE IF NOT EXISTS poc.customer_orders

@@ -4,11 +4,13 @@ This workspace provides a local POC for:
 
 - ClickHouse database with a mock `poc.customer_orders` table.
 - MariaDB database with a mock `poc.customer_accounts` table.
-- Trino engine that can query both databases:
+- MinIO object storage for Iceberg tables in the `poc.customer_preferences` table.
+- Trino 479 engine that can query all three data sources:
   - `clickhouse.poc.customer_orders`
   - `mariadb.poc.customer_accounts`
+  - `minio.poc.customer_preferences`
 
-## Start ClickHouse, MariaDB, and Trino
+## Start the infrastructure
 
 ```bash
 docker compose up -d
@@ -16,36 +18,82 @@ docker compose up -d
 
 Services:
 
-| Service         | URL / Port               | Purpose                   |
-| --------------- | ------------------------ | ------------------------- |
-| ClickHouse      | `localhost:19000`        | Local OLAP database       |
-| ClickHouse HTTP | `http://localhost:18123` | Local OLAP database       |
-| MariaDB         | `localhost:13306`        | Local relational database |
-| Trino HTTP      | `http://localhost:18080` | SQL engine over both DBs  |
+| Service          | URL / Port               | Purpose                             |
+| ---------------- | ------------------------ | ----------------------------------- |
+| ClickHouse       | `localhost:19000`        | Local OLAP database                 |
+| ClickHouse HTTP  | `http://localhost:18123` | Local OLAP database                 |
+| MariaDB          | `localhost:13306`        | Local relational database           |
+| MinIO API        | `http://localhost:19001` | S3-compatible object storage        |
+| MinIO Console    | `http://localhost:19002` | MinIO web UI (`admin` / `password`) |
+| Iceberg REST API | `http://localhost:19003` | Iceberg metadata catalog            |
+| Trino HTTP       | `http://localhost:18080` | SQL engine over all data sources    |
 
-The initialized mock tables are:
+Each direct subdirectory under `clickhouse/`, `mariadb/`, or `minio/`
+represents a schema in the corresponding Trino catalog. For example:
 
 ```text
-clickhouse.poc.customer_orders
-mariadb.poc.customer_accounts
+clickhouse/poc2/ -> schema clickhouse.poc2
+mariadb/poc2/    -> schema mariadb.poc2
+minio/poc2/      -> bucket poc2 -> schema minio.poc2
 ```
+
+MinIO discovers directories and creates buckets during startup. After Trino is
+healthy, `trino-init` scans every schema directory under all three data source
+folders, creates the corresponding schema, and executes every `*.sql` file in
+that directory.
+
+- `clickhouse/{schema}/*.sql` contains ClickHouse-native SQL.
+- `mariadb/{schema}/*.sql` contains MariaDB-native SQL. Use fully qualified
+  table names such as `poc2.customer_accounts`; do not rely on `USE poc2`,
+  because statements may use different JDBC connections.
+- `minio/{schema}/*.sql` contains Trino SQL for Iceberg tables.
+
+Each statement should end with a semicolon. A final statement without a
+semicolon is also accepted. DDL should use `IF NOT EXISTS`, and seed inserts
+should guard against duplicate rows, so rerunning `trino-init` is idempotent.
+The local MariaDB Trino catalog uses the local `root` account so it can create
+additional schemas. Do not use these development credentials in production.
+
+### Add schemas and tables
+
+Create schema directories as needed and add one SQL file per table:
+
+```bash
+mkdir -p clickhouse/poc2
+mkdir -p mariadb/poc2
+mkdir -p minio/poc2
+```
+
+```text
+clickhouse/poc2/customer_events.sql
+mariadb/poc2/customer_accounts.sql
+minio/poc2/customer_segments.sql
+```
+
+If a new `minio/{schema}` directory was added, restart MinIO once so it creates
+the matching bucket, and then run the complete initializer:
+
+```bash
+docker compose restart minio
+docker compose up trino-init
+```
+
+When adding ClickHouse or MariaDB schemas/tables, or another SQL file to an
+existing MinIO schema, MinIO does not need to restart. Run only:
+
+```bash
+docker compose up trino-init
+```
+
+`trino-init` creates missing schemas/tables and seed rows according to the SQL
+files. It does not drop or replace existing tables, so existing data remains.
 
 ## Verify Trino SQL
 
 Trino's HTTP API can return the first response before query results are ready. If the response includes `nextUri`, the client must keep polling it until no `nextUri` is returned.
 
-Create a `.env` file in the demo directory:
-
 ```bash
-TRINO_URL=http://localhost:18080
-TRINO_USER=poc_user
-TRINO_SQL=
-```
-
-Run the Python demo:
-
-```bash
-python3 demo/trino_query.py
+set -a; source demo/.env; python3 demo/test-trino.py
 ```
 
 ## Stop Services
