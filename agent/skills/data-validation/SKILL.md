@@ -33,5 +33,11 @@ description: 統籌 DataHub 資料表的 validation-as-code 流程：取得上�
   撰寫成 pure Pandas body，交由 Server 檢查。
 - 不可推測使用者已同意；必須完整顯示實際提交的 col/row rules 並收到明確肯定回覆。
 - 產生器只讀取 Server 保存且已確認的正式版 rules。
+- `data_validation.py` 首次生成後即凍結；保存 generator 回傳內容的 SHA-256。pytest 失敗時只
+  可修改 `test_data_validation.py`，不可再次呼叫 `gen_data_validation` 產生不同內容。
+- 每次使用者環境 pytest 都要提交真實 return code、command、output 與 production/test hashes
+  給 `record_pytest_result`；只有最後一次成功證據可供完成 workflow。
+- 不可用 skip/xfail、刪除 rule coverage 或弱化 assertions 讓測試虛假通過。若失敗源自
+  production implementation，在不可修改 `data_validation.py` 的限制下應進入 `blocked`。
 - 工具回傳 `ERROR:` 時停止該流程並說明錯誤；只有 state 為 `blocked` 時才呼叫
   `resume_validation`。

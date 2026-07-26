@@ -1,6 +1,7 @@
 """使用記憶體內 workflow state machine 的 Data Validation Agent MCP Server。"""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -32,6 +33,9 @@ get_field_spec -> submit_validation_rules -> 使用者同時確認完整 col_rul
 confirm_validation_rules -> 四個 artifact generators -> complete_validation。
 validation_rules.json 內的 examples.sql 只作為 review 用的 boolean expression，Server 不會執行。
 Agent Host 必須將 artifacts 寫入 artifacts/{workflow_id}/，並在完成前讀回及執行 pytest。
+data_validation.py 首次產生後會以 SHA-256 凍結；Agent 必須用 record_pytest_result 提交使用者
+環境的 pytest 證據，失敗時只可修改 test_data_validation.py。成功證據與檔案 hash 相符後，
+complete_validation 才會完成 workflow。
 """.strip()
 
 mcp = FastMCP(
@@ -44,6 +48,10 @@ mcp = FastMCP(
 
 def _json(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _sha256(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _state(workflow_id: str) -> WorkflowState:
@@ -175,7 +183,9 @@ def gen_validation_rules(workflow_id: str) -> str:
     try:
         rules = workflow_store.validation_rules(workflow_id)
         content = render_validation_rules_json(rules)
-        workflow_store.artifact_generated(workflow_id, "validation_rules")
+        workflow_store.artifact_generated(
+            workflow_id, "validation_rules", _sha256(content)
+        )
         return content
     except WorkflowError as exc:
         return f"ERROR: {exc}"
@@ -192,7 +202,7 @@ def gen_readme(workflow_id: str) -> str:
         resume_state = _state(workflow_id)
         rules = workflow_store.validation_rules(workflow_id)
         content = render_readme(rules)
-        workflow_store.artifact_generated(workflow_id, "readme")
+        workflow_store.artifact_generated(workflow_id, "readme", _sha256(content))
         return content
     except WorkflowError as exc:
         return f"ERROR: {exc}"
@@ -214,7 +224,9 @@ def gen_data_validation(workflow_id: str, row_impl_code_json: str) -> str:
         spec = workflow_store.field_spec(workflow_id)
         impl_code = build_impl_code(rules, spec, row_impl_code_json)
         content = render_data_validation_module(impl_code)
-        workflow_store.artifact_generated(workflow_id, "data_validation")
+        workflow_store.artifact_generated(
+            workflow_id, "data_validation", _sha256(content)
+        )
         return content
     except (WorkflowError, ValueError) as exc:
         return f"ERROR: {exc}"
@@ -235,7 +247,9 @@ def gen_test_data_validation(workflow_id: str, row_test_code_json: str) -> str:
         rules = workflow_store.validation_rules(workflow_id)
         test_code = build_test_code(rules, row_test_code_json)
         content = render_test_module(test_code)
-        workflow_store.artifact_generated(workflow_id, "test_data_validation")
+        workflow_store.artifact_generated(
+            workflow_id, "test_data_validation", _sha256(content)
+        )
         return content
     except (WorkflowError, ValueError) as exc:
         return f"ERROR: {exc}"
@@ -246,12 +260,42 @@ def gen_test_data_validation(workflow_id: str, row_test_code_json: str) -> str:
 
 
 @mcp.tool()
+def record_pytest_result(
+    workflow_id: str,
+    data_validation_sha256: str,
+    test_data_validation_sha256: str,
+    return_code: int,
+    pytest_command: str,
+    pytest_output: str,
+) -> str:
+    """
+    記錄使用者環境的真實 pytest 結果。data_validation.py 必須保持 generator 凍結的 hash；
+    失敗時 Agent 只能修正 test_data_validation.py 後重跑。
+    """
+    try:
+        return _json(
+            workflow_store.record_pytest_result(
+                workflow_id,
+                data_validation_sha256,
+                test_data_validation_sha256,
+                return_code,
+                pytest_command,
+                pytest_output,
+            )
+        )
+    except WorkflowError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
 def complete_validation(
     workflow_id: str,
     validation_rules_path: str,
     readme_path: str,
     data_validation_path: str,
     test_data_validation_path: str,
+    data_validation_sha256: str,
+    test_data_validation_sha256: str,
 ) -> str:
     """四個 artifacts 已寫入、讀回並通過 pytest 後，將 workflow 標記為完成。"""
     try:
@@ -262,6 +306,8 @@ def complete_validation(
                 readme_path,
                 data_validation_path,
                 test_data_validation_path,
+                data_validation_sha256,
+                test_data_validation_sha256,
             )
         )
     except WorkflowError as exc:

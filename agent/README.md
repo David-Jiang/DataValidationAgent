@@ -17,7 +17,8 @@ stateDiagram-v2
     Confirmed --> DraftingRules: 修改規則
     Confirmed --> GeneratingArtifacts: 任一 generator
     GeneratingArtifacts --> GeneratingArtifacts: 其餘 generators
-    GeneratingArtifacts --> Completed: 寫入、讀回、pytest、complete_validation
+    GeneratingArtifacts --> GeneratingArtifacts: pytest 失敗、只修測試檔、重新記錄
+    GeneratingArtifacts --> Completed: pytest 通過且 hashes 相符、complete_validation
     AwaitingSchema --> Blocked: 作業錯誤
     GeneratingArtifacts --> Blocked: 作業錯誤
     Blocked --> AwaitingSchema: resume_validation
@@ -32,8 +33,8 @@ stateDiagram-v2
 | `drafting_rules` | 已載入 field-spec contract | 討論 col/row rules；`submit_validation_rules` |
 | `awaiting_confirmation` | 完整 rules 已保存 | 分組顯示並等待人工確認 |
 | `confirmed` | field spec 與 rules hash 均已確認 | 四個 artifact generators |
-| `generating_artifacts` | 至少一個 artifact 已產生 | 產生其餘檔案並驗證 |
-| `completed` | 四個檔案已寫入、讀回並通過 pytest | 終止狀態 |
+| `generating_artifacts` | 至少一個 artifact 已產生 | 產生其餘檔案、凍結 production hash、執行 pytest repair loop |
+| `completed` | 四個檔案已寫入、讀回，且使用者環境 pytest 與檔案 hashes 通過 MCP gate | 終止狀態 |
 
 ## 確認 Acceptance Criteria
 
@@ -60,7 +61,8 @@ SQL 或其他方式提出的 row rule，也必須正規化、提交及顯示後�
 | 8 | `gen_readme(workflow_id)` |
 | 9 | `gen_data_validation(workflow_id, row_impl_code_json)` |
 | 10 | `gen_test_data_validation(workflow_id, row_test_code_json)` |
-| 11 | 寫入、讀回、執行 pytest，再呼叫 `complete_validation(...)` |
+| 11 | 寫入、讀回，在使用者環境執行 pytest；每次呼叫 `record_pytest_result(...)` |
+| 12 | pytest 通過後，帶入通過時的 production/test hashes 呼叫 `complete_validation(...)` |
 
 ## Artifact 交付
 
@@ -74,6 +76,11 @@ artifacts/{workflow-id}/test_data_validation.py
 四個檔案都是必要產物。`validation_rules.json` 是人類確認過的規則契約；README 以中文摘要
 及分組表格呈現；runtime 提供 `validate(df)`；pytest 為每條規則提供 pass/fail case，另含空
 DataFrame shortcut，不含 execution-failure test。
+
+`data_validation.py` 首次產生後由 MCP 保存 SHA-256，進入 immutable 狀態。pytest 失敗時 Agent
+只能修改 `test_data_validation.py`，不得重新產生或修改 production module；每次真實執行結果、
+command 與兩個檔案 hashes 都由 `record_pytest_result` 記錄。連續五次失敗會進入 `blocked`，需
+人工確認後才能 resume。這是一個由 Skill 執行、MCP state gate 約束的 bounded repair loop。
 
 ## POC 限制
 

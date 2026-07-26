@@ -44,11 +44,17 @@
 | `gen_readme`                     | 產生中文規則摘要與分組表格                       |
 | `gen_data_validation`            | 產生 Pandas-native `data_validation.py`          |
 | `gen_test_data_validation`       | 產生每條規則皆有 pass/fail case 的 pytest        |
+| `record_pytest_result`           | 記錄使用者環境 pytest、production/test hashes 與輸出 |
 | `complete_validation`            | 四個檔案寫入、讀回並通過 pytest 後登記完成       |
 | `resume_validation`              | 修正作業錯誤後恢復 blocked workflow              |
 
 Artifact generators 只讀取 Server 內已提交且已確認的 field spec 與 validation rules。重新
 呼叫 `get_field_spec` 會使舊 confirmation 與 artifact 狀態失效。
+
+`gen_data_validation` 首次成功後會保存 content SHA-256；相同內容可以 idempotent 重取，不同內容
+會被拒絕。Agent 在使用者 repo 執行 pytest 後，必須呼叫 `record_pytest_result`，且提交的
+`data_validation_sha256` 必須與凍結版本一致。測試檔可在失敗後修正並使用新 hash 重跑；
+`complete_validation` 只接受最後一次成功 pytest 所對應的 production/test hashes。
 
 ## 人工確認關卡
 
@@ -71,13 +77,15 @@ rule evaluation 前直接回傳兩個空 DataFrame。非空資料若違反規則
 `__validation_failure_reasons__`。
 
 產生的 pytest 包含每條 col/row rule 至少一個 passing case 與 failing case，以及空
-DataFrame shortcut；不產生 execution-failure 測試。
+DataFrame shortcut；不產生 execution-failure 測試。pytest 實際在 Agent 可存取的使用者環境
+執行，MCP 只保存證據與約束 state transition，不要求 Client 安裝 LangGraph 或額外 runtime。
 
 ## 記憶體內儲存
 
 `core/workflow.py` 的 module-level `workflow_store` 是 process-local map。它保存 dataset URN、
-upstream schema、field spec/rules hash、人工確認、artifact 狀態與歷程，不保存 artifact
-內容。這是 POC 設計：Server 重啟會遺失 workflow，多個 replica 也不共享狀態。
+upstream schema、field spec/rules hash、人工確認、artifact hashes、pytest 證據、artifact
+狀態與歷程，不保存 artifact 內容。這是 POC 設計：Server 重啟會遺失 workflow，多個 replica
+也不共享狀態。
 
 ## 環境與測試
 

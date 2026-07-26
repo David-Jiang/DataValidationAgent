@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 
@@ -34,8 +35,23 @@ def ready_for_confirmation(store: WorkflowStore):
 
 def generate_all(store: WorkflowStore, workflow_id: str) -> dict[str, str]:
     for artifact in REQUIRED_ARTIFACTS:
-        store.artifact_generated(workflow_id, artifact)
+        store.artifact_generated(workflow_id, artifact, digest(artifact))
     return store.expected_artifact_paths(workflow_id)
+
+
+def digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def record_passing_pytest(store: WorkflowStore, workflow_id: str) -> None:
+    store.record_pytest_result(
+        workflow_id,
+        digest("data_validation"),
+        digest("repaired_test"),
+        0,
+        "python -m pytest -q test_data_validation.py",
+        "2 passed",
+    )
 
 
 def test_workflow_id_contains_utc_date_and_four_base36_characters() -> None:
@@ -63,12 +79,15 @@ def test_happy_path_confirms_both_rule_groups_and_delivers_four_artifacts() -> N
     assert confirmed["confirmation"]["validation_rules_sha256"]
 
     paths = generate_all(store, workflow_id)
+    record_passing_pytest(store, workflow_id)
     completed = store.complete(
         workflow_id,
         paths["validation_rules"],
         paths["readme"],
         paths["data_validation"],
         paths["test_data_validation"],
+        digest("data_validation"),
+        digest("repaired_test"),
     )
 
     assert completed["state"] == WorkflowState.completed.value
@@ -92,7 +111,9 @@ def test_loading_contract_after_confirmation_invalidates_rules_and_artifacts() -
     store = WorkflowStore()
     workflow_id, _spec, _rules = ready_for_confirmation(store)
     store.confirm(workflow_id)
-    store.artifact_generated(workflow_id, "validation_rules")
+    store.artifact_generated(
+        workflow_id, "validation_rules", digest("validation_rules")
+    )
 
     snapshot = store.contract_loaded(workflow_id, CONTRACT)
 
@@ -108,7 +129,9 @@ def test_completion_rejects_missing_artifacts() -> None:
     store = WorkflowStore()
     workflow_id, _spec, _rules = ready_for_confirmation(store)
     store.confirm(workflow_id)
-    store.artifact_generated(workflow_id, "validation_rules")
+    store.artifact_generated(
+        workflow_id, "validation_rules", digest("validation_rules")
+    )
     paths = store.expected_artifact_paths(workflow_id)
 
     with pytest.raises(WorkflowError, match="readme, data_validation, test_data_validation"):
@@ -118,6 +141,8 @@ def test_completion_rejects_missing_artifacts() -> None:
             paths["readme"],
             paths["data_validation"],
             paths["test_data_validation"],
+            digest("data_validation"),
+            digest("repaired_test"),
         )
 
 
@@ -126,6 +151,7 @@ def test_completion_rejects_non_workflow_path() -> None:
     workflow_id, _spec, _rules = ready_for_confirmation(store)
     store.confirm(workflow_id)
     paths = generate_all(store, workflow_id)
+    record_passing_pytest(store, workflow_id)
 
     with pytest.raises(WorkflowError, match="readme_path"):
         store.complete(
@@ -134,7 +160,106 @@ def test_completion_rejects_non_workflow_path() -> None:
             "artifacts/README.md",
             paths["data_validation"],
             paths["test_data_validation"],
+            digest("data_validation"),
+            digest("repaired_test"),
         )
+
+
+def test_completion_requires_passing_pytest_evidence() -> None:
+    store = WorkflowStore()
+    workflow_id, _spec, _rules = ready_for_confirmation(store)
+    store.confirm(workflow_id)
+    paths = generate_all(store, workflow_id)
+
+    with pytest.raises(WorkflowError, match="尚未記錄成功"):
+        store.complete(
+            workflow_id,
+            paths["validation_rules"],
+            paths["readme"],
+            paths["data_validation"],
+            paths["test_data_validation"],
+            digest("data_validation"),
+            digest("repaired_test"),
+        )
+
+
+def test_pytest_loop_freezes_data_validation_but_allows_test_repairs() -> None:
+    store = WorkflowStore()
+    workflow_id, _spec, _rules = ready_for_confirmation(store)
+    store.confirm(workflow_id)
+    generate_all(store, workflow_id)
+
+    failed = store.record_pytest_result(
+        workflow_id,
+        digest("data_validation"),
+        digest("initial_test"),
+        1,
+        "uv run pytest -q test_data_validation.py tests",
+        "fixture failed",
+    )
+    assert failed["pytest_verification"]["passed"] is False
+    assert len(failed["pytest_verification"]["attempts"]) == 1
+
+    passed = store.record_pytest_result(
+        workflow_id,
+        digest("data_validation"),
+        digest("repaired_test"),
+        0,
+        "uv run pytest -q test_data_validation.py tests",
+        "all passed",
+    )
+    assert passed["pytest_verification"]["passed"] is True
+    assert passed["pytest_verification"]["test_data_validation_sha256"] == digest(
+        "repaired_test"
+    )
+
+    with pytest.raises(WorkflowError, match="凍結版本不一致"):
+        store.record_pytest_result(
+            workflow_id,
+            digest("unauthorized_data_change"),
+            digest("repaired_test"),
+            0,
+            "pytest",
+            "passed against changed production code",
+        )
+
+
+def test_data_validation_generator_is_immutable_after_first_generation() -> None:
+    store = WorkflowStore()
+    workflow_id, _spec, _rules = ready_for_confirmation(store)
+    store.confirm(workflow_id)
+    store.artifact_generated(
+        workflow_id, "data_validation", digest("data_validation")
+    )
+
+    with pytest.raises(WorkflowError, match="已凍結"):
+        store.artifact_generated(
+            workflow_id, "data_validation", digest("changed_data_validation")
+        )
+
+
+def test_five_failed_pytest_attempts_require_human_resume() -> None:
+    store = WorkflowStore()
+    workflow_id, _spec, _rules = ready_for_confirmation(store)
+    store.confirm(workflow_id)
+    generate_all(store, workflow_id)
+
+    snapshot = None
+    for attempt in range(5):
+        snapshot = store.record_pytest_result(
+            workflow_id,
+            digest("data_validation"),
+            digest(f"test_attempt_{attempt}"),
+            1,
+            "pytest",
+            f"failure {attempt}",
+        )
+
+    assert snapshot is not None
+    assert snapshot["state"] == WorkflowState.blocked.value
+    assert snapshot["blocked"]["resume_state"] == WorkflowState.generating_artifacts.value
+    resumed = store.resume(workflow_id)
+    assert resumed["state"] == WorkflowState.generating_artifacts.value
 
 
 def test_snapshot_hides_rule_documents_but_keeps_hashes() -> None:
