@@ -1,3 +1,4 @@
+-- Initializes poc.customer_accounts.
 CREATE DATABASE IF NOT EXISTS poc COMMENT 'POC catalog database for local data validation demos.';
 
 USE poc;
