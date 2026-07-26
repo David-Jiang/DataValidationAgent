@@ -1,9 +1,7 @@
 -- Initializes poc.customer_accounts.
 CREATE DATABASE IF NOT EXISTS poc COMMENT 'POC catalog database for local data validation demos.';
 
-USE poc;
-
-CREATE TABLE IF NOT EXISTS customer_accounts
+CREATE TABLE IF NOT EXISTS poc.customer_accounts
 (
     customer_id VARCHAR(32) NOT NULL COMMENT 'Unique customer identifier used across source systems.',
     customer_email VARCHAR(255) NOT NULL COMMENT 'Primary customer email address captured during registration.',
@@ -19,7 +17,7 @@ CREATE TABLE IF NOT EXISTS customer_accounts
 )
 COMMENT = 'Mock customer account dimension table for validating MariaDB access through Trino.';
 
-INSERT INTO customer_accounts
+INSERT INTO poc.customer_accounts
     (
         customer_id,
         customer_email,
@@ -67,4 +65,4 @@ FROM
         'standard',
         'JP'
 ) AS seed
-WHERE NOT EXISTS (SELECT 1 FROM customer_accounts);
+WHERE NOT EXISTS (SELECT 1 FROM poc.customer_accounts);

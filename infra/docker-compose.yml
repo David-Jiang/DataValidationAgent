@@ -10,7 +10,7 @@ services:
     environment:
       CLICKHOUSE_DB: poc
       CLICKHOUSE_USER: admin
-      CLICKHOUSE_PASSWORD: admin
+      CLICKHOUSE_PASSWORD: password
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
@@ -29,8 +29,8 @@ services:
     environment:
       MARIADB_DATABASE: poc
       MARIADB_USER: admin
-      MARIADB_PASSWORD: admin
-      MARIADB_ROOT_PASSWORD: root
+      MARIADB_PASSWORD: password
+      MARIADB_ROOT_PASSWORD: password
     volumes:
       - mariadb-data:/var/lib/mysql
       - ./mariadb/poc:/docker-entrypoint-initdb.d:ro
@@ -49,7 +49,7 @@ services:
       - "19002:9001"
     environment:
       MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: admin
+      MINIO_ROOT_PASSWORD: password
     volumes:
       - minio-data:/data
       - ./minio:/minio:ro
@@ -67,7 +67,7 @@ services:
         condition: service_healthy
     environment:
       AWS_ACCESS_KEY_ID: admin
-      AWS_SECRET_ACCESS_KEY: admin
+      AWS_SECRET_ACCESS_KEY: password
       AWS_REGION: us-east-1
       CATALOG_WAREHOUSE: s3://poc/
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
@@ -106,9 +106,11 @@ services:
       TRINO_URL: http://trino:8080
       TRINO_USER: poc_user
     volumes:
+      - ./clickhouse:/clickhouse:ro
+      - ./mariadb:/mariadb:ro
       - ./minio:/minio:ro
-      - ./trino/init-minio-schema.sh:/init/init-minio-schema.sh:ro
-    entrypoint: ["/bin/sh", "/init/init-minio-schema.sh"]
+      - ./trino/init-schemas.sh:/init/init-schemas.sh:ro
+    entrypoint: ["/bin/sh", "/init/init-schemas.sh"]
 
 volumes:
   clickhouse-data:

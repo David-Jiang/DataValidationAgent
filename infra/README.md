@@ -28,44 +28,65 @@ Services:
 | Iceberg REST API | `http://localhost:19003` | Iceberg metadata catalog            |
 | Trino HTTP       | `http://localhost:18080` | SQL engine over all data sources    |
 
-Each direct subdirectory under `minio/` represents both a MinIO bucket and a
-schema in the `minio` Trino catalog. For example:
+Each direct subdirectory under `clickhouse/`, `mariadb/`, or `minio/`
+represents a schema in the corresponding Trino catalog. For example:
 
 ```text
-minio/poc/  -> bucket poc  -> schema minio.poc
-minio/poc2/ -> bucket poc2 -> schema minio.poc2
-minio/poc3/ -> bucket poc3 -> schema minio.poc3
+clickhouse/poc2/ -> schema clickhouse.poc2
+mariadb/poc2/    -> schema mariadb.poc2
+minio/poc2/      -> bucket poc2 -> schema minio.poc2
 ```
 
 MinIO discovers directories and creates buckets during startup. After Trino is
-healthy, `trino-init` independently scans every `minio/*/` directory, creates
-the corresponding schema, and executes every `*.sql` file in that directory.
+healthy, `trino-init` scans every schema directory under all three data source
+folders, creates the corresponding schema, and executes every `*.sql` file in
+that directory.
 
-### Add a MinIO catalog and tables
+- `clickhouse/{schema}/*.sql` contains ClickHouse-native SQL.
+- `mariadb/{schema}/*.sql` contains MariaDB-native SQL. Use fully qualified
+  table names such as `poc2.customer_accounts`; do not rely on `USE poc2`,
+  because statements may use different JDBC connections.
+- `minio/{schema}/*.sql` contains Trino SQL for Iceberg tables.
 
-Create the catalog directory and add one SQL file per table:
+Each statement should end with a semicolon. A final statement without a
+semicolon is also accepted. DDL should use `IF NOT EXISTS`, and seed inserts
+should guard against duplicate rows, so rerunning `trino-init` is idempotent.
+The local MariaDB Trino catalog uses the local `root` account so it can create
+additional schemas. Do not use these development credentials in production.
+
+### Add schemas and tables
+
+Create schema directories as needed and add one SQL file per table:
 
 ```bash
+mkdir -p clickhouse/poc2
+mkdir -p mariadb/poc2
 mkdir -p minio/poc2
 ```
 
 ```text
+clickhouse/poc2/customer_events.sql
+mariadb/poc2/customer_accounts.sql
 minio/poc2/customer_segments.sql
 ```
 
-Run the complete refresh operation:
+If a new `minio/{schema}` directory was added, restart MinIO once so it creates
+the matching bucket, and then run the complete initializer:
 
 ```bash
 docker compose restart minio
 docker compose up trino-init
 ```
 
-When only adding another SQL file to an existing catalog, MinIO does not need to
-restart. Rerun only:
+When adding ClickHouse or MariaDB schemas/tables, or another SQL file to an
+existing MinIO schema, MinIO does not need to restart. Run only:
 
 ```bash
 docker compose up trino-init
 ```
+
+`trino-init` creates missing schemas/tables and seed rows according to the SQL
+files. It does not drop or replace existing tables, so existing data remains.
 
 ## Verify Trino SQL
 
