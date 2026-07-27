@@ -59,25 +59,41 @@ services:
       timeout: 3s
       retries: 20
 
-  iceberg-rest:
-    image: tabulario/iceberg-rest:1.6.0
-    container_name: dva-iceberg-rest
+  hive-metastore-db:
+    image: mariadb:11
+    container_name: dva-hive-metastore-db
+    environment:
+      MARIADB_DATABASE: metastore_v3
+      MARIADB_USER: hive
+      MARIADB_PASSWORD: password
+      MARIADB_ROOT_PASSWORD: password
+    volumes:
+      - hive-metastore-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  hive-metastore:
+    platform: linux/amd64
+    build:
+      context: ./hive-metastore
+    image: dva-hive-metastore:3.0.0
+    container_name: dva-hive-metastore
     depends_on:
+      hive-metastore-db:
+        condition: service_healthy
       minio:
         condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: admin
-      AWS_SECRET_ACCESS_KEY: password
-      AWS_REGION: us-east-1
-      CATALOG_WAREHOUSE: s3://poc/
-      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://minio:9000
-      CATALOG_S3_PATH__STYLE__ACCESS: "true"
-      CATALOG_URI: jdbc:sqlite:file:/home/iceberg/iceberg.db
     volumes:
-      - iceberg-catalog-data:/home/iceberg
-    ports:
-      - "19003:8181"
+      - ./hive-metastore/conf/core-site.xml:/opt/hadoop-3.3.3/etc/hadoop/core-site.xml:ro
+      - ./hive-metastore/conf/metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9083'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
   trino:
     image: trinodb/trino:479
@@ -87,8 +103,8 @@ services:
         condition: service_healthy
       mariadb:
         condition: service_healthy
-      iceberg-rest:
-        condition: service_started
+      hive-metastore:
+        condition: service_healthy
     ports:
       - "18080:8080"
     volumes:
@@ -116,4 +132,4 @@ volumes:
   clickhouse-data:
   mariadb-data:
   minio-data:
-  iceberg-catalog-data:
+  hive-metastore-db-data:
