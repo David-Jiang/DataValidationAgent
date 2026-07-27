@@ -18,11 +18,11 @@
   </property>
   <property>
     <name>javax.jdo.option.ConnectionDriverName</name>
-    <value>org.mariadb.jdbc.Driver</value>
+    <value>com.mysql.cj.jdbc.Driver</value>
   </property>
   <property>
     <name>javax.jdo.option.ConnectionURL</name>
-    <value>jdbc:mariadb://hive-metastore-db:3306/metastore_v3</value>
+    <value>jdbc:mysql://hive-metastore-db:3306/metastore_v3</value>
   </property>
   <property>
     <name>javax.jdo.option.ConnectionUserName</name>
