@@ -109,6 +109,11 @@ services:
       - "18080:8080"
     volumes:
       - ./trino/catalog:/etc/trino/catalog:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
 
   trino-init:
     image: trinodb/trino:479
