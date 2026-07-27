@@ -5,6 +5,10 @@ set -eu
 TRINO_URL="${TRINO_URL:-http://trino:8080}"
 TRINO_USER="${TRINO_USER:-poc_user}"
 
+minio_bucket_name() {
+    printf '%s' "$1" | tr '_' '-'
+}
+
 execute_sql() {
     label="$1"
     sql="$2"
@@ -127,7 +131,8 @@ initialize_catalog() {
         quoted_schema_name="$(printf '%s' "${schema_name}" | sed 's/"/""/g')"
 
         if [ "${catalog}" = "minio" ]; then
-            schema_sql="CREATE SCHEMA IF NOT EXISTS minio.\"${quoted_schema_name}\" WITH (location = 's3://${schema_name}/')"
+            bucket_name="$(minio_bucket_name "${schema_name}")"
+            schema_sql="CREATE SCHEMA IF NOT EXISTS minio.\"${quoted_schema_name}\" WITH (location = 's3://${bucket_name}/')"
         else
             schema_sql="CREATE SCHEMA IF NOT EXISTS ${catalog}.\"${quoted_schema_name}\""
         fi

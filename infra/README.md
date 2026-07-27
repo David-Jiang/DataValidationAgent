@@ -51,7 +51,10 @@ Hive Metastore 與專用 MariaDB 都不開放 host port。metadata database 使�
 clickhouse/poc2/ -> schema clickhouse.poc2
 mariadb/poc2/    -> schema mariadb.poc2
 minio/poc2/      -> bucket poc2 -> schema minio.poc2
+minio/poc_ab_cd/ -> bucket poc-ab-cd -> schema minio.poc_ab_cd
 ```
+
+MinIO bucket name 不允許底線 `_`。`minio/{schema}` 目錄名稱包含底線時，啟動程序會在建立 bucket 時自動轉成連字號 `-`，但 Trino schema 仍保留原本名稱。請勿同時建立 `poc_ab` 與 `poc-ab` 這類會映射到相同 bucket 的目錄；初始化程序偵測到衝突時會停止並顯示錯誤。
 
 目前提供三組模擬 schema，每種 datasource 各有一張範例資料表：
 

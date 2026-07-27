@@ -6,6 +6,10 @@ minio_pid=""
 bucket_root="/minio"
 ready_marker="/tmp/minio-buckets-ready"
 
+minio_bucket_name() {
+    printf '%s' "$1" | tr '_' '-'
+}
+
 stop_minio() {
     if [ -n "${minio_pid}" ] && kill -0 "${minio_pid}" 2>/dev/null; then
         kill -TERM "${minio_pid}"
@@ -28,13 +32,36 @@ until mc alias set local http://localhost:9000 admin password >/dev/null 2>&1; d
 done
 
 found_bucket=false
+mapped_bucket_names=""
 for catalog_directory in "${bucket_root}"/*/; do
     if [ ! -d "${catalog_directory}" ]; then
         continue
     fi
 
-    bucket_name="${catalog_directory%/}"
-    bucket_name="${bucket_name##*/}"
+    schema_name="${catalog_directory%/}"
+    schema_name="${schema_name##*/}"
+    bucket_name="$(minio_bucket_name "${schema_name}")"
+
+    case "
+${mapped_bucket_names}" in
+        *"
+${bucket_name}
+"*)
+            printf 'Multiple schema directories map to MinIO bucket %s; rename one of them\n' \
+                "${bucket_name}" >&2
+            stop_minio
+            wait "${minio_pid}" || true
+            exit 1
+            ;;
+    esac
+    mapped_bucket_names="${mapped_bucket_names}${bucket_name}
+"
+
+    if [ "${schema_name}" != "${bucket_name}" ]; then
+        printf 'Mapping schema directory %s to MinIO bucket %s\n' \
+            "${schema_name}" "${bucket_name}"
+    fi
+
     mc mb --ignore-existing "local/${bucket_name}"
     found_bucket=true
 done
