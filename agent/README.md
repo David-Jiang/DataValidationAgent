@@ -1,172 +1,90 @@
-# Data Validation Agent — Agent Host
+# Data Validation Agent — Agent 套件
 
-本目錄是部署到共用 Agent Host 的 agent bundle。
+本目錄提供 Agent Host 使用的單一 `data-validation` Skill。輸入 DataHub dataset URN 後，
+Agent 會與使用者一起確認欄位規則及跨欄位商業規則，最後交付可直接搬入 Airflow ETL repo
+的 Pandas validation module 與 pytest。
 
-Agent Host 管理對話狀態、workflow 與確認關卡；實際讀取 schema 和產生 artifacts 的能力
-由 Data Validation Agent MCP Server 提供。
+## Workflow
 
-## 核心設計原則
+```mermaid
+stateDiagram-v2
+    [*] --> AwaitingSchema: start_validation
+    AwaitingSchema --> DatasetReady: get_table_schema
+    DatasetReady --> DraftingRules: get_field_spec
+    DraftingRules --> AwaitingConfirmation: submit_validation_rules
+    AwaitingConfirmation --> Confirmed: confirm_validation_rules
+    AwaitingConfirmation --> DraftingRules: 修改規則
+    Confirmed --> DraftingRules: 修改規則
+    Confirmed --> GeneratingArtifacts: 任一 generator
+    GeneratingArtifacts --> GeneratingArtifacts: 其餘 generators
+    GeneratingArtifacts --> GeneratingArtifacts: pytest 失敗、只修測試檔、重新記錄
+    GeneratingArtifacts --> Completed: pytest 通過且 hashes 相符、complete_validation
+    AwaitingSchema --> Blocked: 作業錯誤
+    GeneratingArtifacts --> Blocked: 作業錯誤
+    Blocked --> AwaitingSchema: resume_validation
+    Blocked --> GeneratingArtifacts: resume_validation
+    Completed --> [*]
+```
 
-- `SYSTEM_PROMPT.md` 只定義角色與能力邊界、跨階段必要流程、不可繞過的 guardrails
-  及全域輸出規範。
-- `skills/` 封裝各階段的領域知識、實作細節與操作步驟，並依職責呼叫必要的 MCP tools。
-- MCP Server 提供 stateless tools，不保存草稿、確認狀態或 workflow 進度。
+| 狀態 | 必要條件 | 主要操作 |
+| --- | --- | --- |
+| `awaiting_schema` | workflow 已保存 dataset URN | `get_table_schema` |
+| `dataset_ready` | 已取得 upstream schema | `get_field_spec` |
+| `drafting_rules` | 已載入 field-spec contract | 討論 col/row rules；`submit_validation_rules` |
+| `awaiting_confirmation` | 完整 rules 已保存 | 分組顯示並等待人工確認 |
+| `confirmed` | field spec 與 rules hash 均已確認 | 四個 artifact generators |
+| `generating_artifacts` | 至少一個 artifact 已產生 | 產生其餘檔案、凍結 production hash、執行 pytest repair loop |
+| `completed` | 四個檔案已寫入、讀回，且使用者環境 pytest 與檔案 hashes 通過 MCP gate | 終止狀態 |
 
-這項分工避免 system prompt、Skills、MCP instructions 與 client workspace instructions
-各自形成一份互相漂移的 workflow 規範。
+## 確認 Acceptance Criteria
 
-## 專案結構
+確認畫面必須來自 `get_submitted_validation_rules` 的實際內容，並分為：
+
+1. Column Rules：依欄位分組，每組使用 `<details>` 展開表格。
+2. Cross-field Row Rules：獨立 `<details>` 展開完整表格；若沒有規則也明確顯示 0 條。
+
+每列顯示 rule ID、描述、欄位、passing examples 與 failing examples。使用者以自然語言、
+SQL 或其他方式提出的 row rule，也必須正規化、提交及顯示後才能被確認。沉默、問題、部分
+意見都不算確認；任何修改都要重新提交並再次確認兩組規則。
+
+## 工具順序
+
+| # | 工具 |
+| ---: | --- |
+| 1 | `start_validation(dataset_urn)` |
+| 2 | `get_table_schema(workflow_id)` |
+| 3 | `get_field_spec(workflow_id)` |
+| 4 | `submit_validation_rules(workflow_id, field_spec_json, row_rules_json)` |
+| 5 | `get_submitted_validation_rules(workflow_id)` |
+| 6 | 使用者明確確認後執行 `confirm_validation_rules(workflow_id)` |
+| 7 | `gen_validation_rules(workflow_id)` |
+| 8 | `gen_readme(workflow_id)` |
+| 9 | `gen_data_validation(workflow_id, row_impl_code_json)` |
+| 10 | `gen_test_data_validation(workflow_id, row_test_code_json)` |
+| 11 | 寫入、讀回，在使用者環境執行 pytest；每次呼叫 `record_pytest_result(...)` |
+| 12 | pytest 通過後，帶入通過時的 production/test hashes 呼叫 `complete_validation(...)` |
+
+## Artifact 交付
 
 ```text
-agent/
-├── SYSTEM_PROMPT.md
-└── skills/
-    ├── validation-dataset-intake/
-    │   ├── SKILL.md
-    ├── validation-field-spec/
-    │   ├── SKILL.md
-    ├── validation-confirmation-gate/
-    │   ├── SKILL.md
-    └── validation-artifact-delivery/
-        ├── SKILL.md
+artifacts/{workflow-id}/validation_rules.json
+artifacts/{workflow-id}/README.md
+artifacts/{workflow-id}/data_validation.py
+artifacts/{workflow-id}/test_data_validation.py
 ```
 
-## 元件責任
+四個檔案都是必要產物。`validation_rules.json` 是人類確認過的規則契約；README 以中文摘要
+及分組表格呈現；runtime 提供 `validate(df)`；pytest 為每條規則提供 pass/fail case，另含空
+DataFrame shortcut，不含 execution-failure test。
 
-| 元件                           | 責任                                                               | 不負責                                    |
-| ------------------------------ | ------------------------------------------------------------------ | ----------------------------------------- |
-| `SYSTEM_PROMPT.md`             | 定義 agent 角色、必要 phase 順序、confirmation gate 與全域錯誤政策 | 欄位規則細節或 artifact 寫入步驟          |
-| `validation-dataset-intake`    | 識別 dataset URN、取得並解讀 upstream schema                       | 推測缺少的 URN 或決定 business contract   |
-| `validation-field-spec`        | 載入權威 contract、草擬或修改 `field_spec`、釐清規則               | 確認 spec 或產生 artifact                 |
-| `validation-confirmation-gate` | 以完整可讀表格呈現 exact spec 並取得使用者明確確認                 | 顯示 JSON、只給摘要，或將一般討論視為確認 |
-| `validation-artifact-delivery` | 依 confirmed spec 產生、儲存或回傳 artifacts                       | 修改 confirmed spec 或寫入 database       |
-| MCP Server                     | 執行 DataHub 查詢、contract 讀取和 artifact 生成                   | 保存對話狀態或強制完整 workflow           |
+`data_validation.py` 首次產生後由 MCP 保存 SHA-256，進入 immutable 狀態。pytest 失敗時 Agent
+只能修改 `test_data_validation.py`，不得重新產生或修改 production module；每次真實執行結果、
+command 與兩個檔案 hashes 都由 `record_pytest_result` 記錄。連續五次失敗會進入 `blocked`，需
+人工確認後才能 resume。這是一個由 Skill 執行、MCP state gate 約束的 bounded repair loop。
 
-## Skill 與 MCP Tool 對應
+## POC 限制
 
-| Phase | Skill                          | MCP tool                                     | 完成條件                                  |
-| ----- | ------------------------------ | -------------------------------------------- | ----------------------------------------- |
-| 1     | `validation-dataset-intake`    | `get_table_schema`                           | 已成功取得指定 dataset 的 upstream schema |
-| 2     | `validation-field-spec`        | `get_field_spec`                             | 已產生符合最新 JSON Schema 的待確認 spec  |
-| 3     | `validation-confirmation-gate` | —                                            | 使用者明確確認呈現的 exact spec version   |
-| 4     | `validation-artifact-delivery` | `gen_validation_suite`、選用 `gen_mock_data` | 已交付 artifacts 並說明 residual risk     |
-
-## 必要 Workflow
-
-```text
-Dataset URN
-    │
-    ▼
-validation-dataset-intake ── get_table_schema
-    │ 成功取得 upstream schema
-    ▼
-validation-field-spec ────── get_field_spec
-    │ 完成 field_spec 草稿與規則討論
-    ▼
-validation-confirmation-gate
-    │ 使用者明確確認 exact version
-    ▼
-validation-artifact-delivery
-    ├── gen_validation_suite（必要）
-    └── gen_mock_data（使用者需要時）
-```
-
-以下 gate 不可略過：
-
-1. `get_table_schema` 成功前，不可草擬 table-specific validation rules。
-2. 建立或修改 `field_spec` 前，必須重新取得 `get_field_spec` 的權威 schema。
-3. 使用者明確確認前，不可產生 artifacts。
-4. 確認後若修改任何規則，原確認立即失效，必須回到 field-spec phase 並重新確認。
-5. 任一 MCP tool 回傳以 `ERROR:` 開頭的內容時，立即停止 workflow；不可自行修改 spec
-   後重試或繼續產生其他 artifact。
-
-## 對話狀態與輸出
-
-MCP Server 完全 stateless，因此 Agent Host 必須在對話狀態或使用者選定的位置保留：
-
-- 成功取得的 dataset URN 與 upstream schema
-- 當前 `field_spec` JSON、version 與 change note
-- 尚未解決的 medium/low-confidence assumptions
-- exact spec version 是否已由使用者明確確認
-
-在可寫入 workspace 時，若使用者未指定輸出 root，預設交付結構為：
-
-```text
-validation/
-├── field_specs/<version>_<table_name>_field_spec.json
-├── suites/<table_name>_validation_suite.json
-└── mock_data/<table_name>_mock.csv
-```
-
-若 Agent Host 只有 chat 輸出能力，應以個別 fenced code block 回傳 artifact 內容及建議
-檔名，不可宣稱已寫入檔案。Agent 不會將 mock data 寫入 database。
-
-## Agent Bundle Deployment
-
-### 前置條件
-
-- Data Validation Agent MCP Server 已啟動，且 Agent Host 可連線至其 MCP endpoint。
-- 目標 Agent Host 支援載入 system prompt、Skills，以及呼叫 MCP tools。
-
-### 部署步驟
-
-1. 將 `SYSTEM_PROMPT.md` 設為 Data Validation Agent 的 system prompt。
-2. 將 `skills/` 下四個完整 Skill 目錄註冊或掛載到同一個 Agent Host；保留目錄結構與
-   Skill 名稱。
-3. 將 Agent Host 連線到 Data Validation Agent MCP Server。
-4. 確認 Agent 可發現以下四個 tools：`get_table_schema`、`get_field_spec`、
-   `gen_mock_data`、`gen_validation_suite`。
-5. 依下一節執行 smoke test，確認 workflow gate 由 Agent Host 正確執行。
-
-```text
-使用者 → Agent Host（SYSTEM_PROMPT + Skills）→ MCP Server → DataHub / artifact generators
-```
-
-使用者應與 Agent Host 對話，而不是直接使用 MCP Server。直接連線 MCP Server 只能取得
-tools 與輕量 usage instructions，無法保證 workflow 順序、confirmation gate 或 Skill
-行為。
-
-### Cline 專用部署步驟
-
-Cline 以 **Rules** 承載常駐 system prompt，以 **Skills** 承載按需載入的 phase 指示。
-本 repo 採用 **copy 獨立部署**：canonical 來源仍是 `agent/`，Cline 實際讀取的是專案根
-目錄下的 `.clinerules/` 與 `.cline/skills/`。
-
-#### 對應關係
-
-| Agent bundle             | Cline 機制                        | 部署位置                               |
-| ------------------------ | --------------------------------- | -------------------------------------- |
-| `SYSTEM_PROMPT.md`       | Rules（常駐注入）                 | `.clinerules/data-validation-agent.md` |
-| `skills/<name>/SKILL.md` | Skills（匹配後 `use_skill` 載入） | `.cline/skills/<name>/SKILL.md`        |
-| MCP tools                | MCP Server 連線                   | Cline MCP settings                     |
-
-#### 部署指令
-
-```bash
-mkdir -p .clinerules .cline/skills
-cp agent/SYSTEM_PROMPT.md .clinerules/data-validation-agent.md
-cp -R agent/skills/validation-* .cline/skills/
-```
-
-部署後結構應為：
-
-```text
-.clinerules/
-└── data-validation-agent.md
-.cline/skills/
-├── validation-dataset-intake/SKILL.md
-├── validation-field-spec/SKILL.md
-├── validation-confirmation-gate/SKILL.md
-└── validation-artifact-delivery/SKILL.md
-```
-
-## 維護規則
-
-- 修改跨階段流程或不可繞過的 guardrail：更新 `SYSTEM_PROMPT.md`，並檢查所有 Skills
-  是否仍一致。
-- 修改某一 phase 的操作方式：只更新對應的 `SKILL.md`。
-- 修改 tool signature 或錯誤語意：先更新 MCP Server，再同步更新使用該 tool 的 Skill、
-  `SYSTEM_PROMPT.md` 工具清單與本文件。
-- 修改 `field_spec` contract：更新 MCP Server 的 JSON Schema 與 Pydantic model；不要在
-  system prompt 或 Skill 中複製完整 schema。
-- 新增 Skill 或 MCP tool 時，同步更新元件責任表、對應表、部署檢查與 smoke test。
+- Workflow store 是單一 MCP process 內的全域 map，重啟後遺失且 replica 間不共享。
+- 尚未實作持久化、workflow expiry、租戶隔離或具身分驗證的人工核准。
+- `examples.sql` 只供 review，不會執行；row-rule Python 由 Agent 按已確認語意產生，並通過
+  Server 的 AST 限制後才寫入 module。

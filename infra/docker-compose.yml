@@ -2,7 +2,7 @@ name: dva-infra
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:25.5-alpine
     container_name: dva-clickhouse
     ports:
       - "19000:9000"
@@ -10,7 +10,7 @@ services:
     environment:
       CLICKHOUSE_DB: poc
       CLICKHOUSE_USER: admin
-      CLICKHOUSE_PASSWORD: admin
+      CLICKHOUSE_PASSWORD: password
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
@@ -22,15 +22,15 @@ services:
       retries: 20
 
   mariadb:
-    image: mariadb:11
+    image: mariadb:10.11.15
     container_name: dva-mariadb
     ports:
       - "13306:3306"
     environment:
       MARIADB_DATABASE: poc
       MARIADB_USER: admin
-      MARIADB_PASSWORD: admin
-      MARIADB_ROOT_PASSWORD: root
+      MARIADB_PASSWORD: password
+      MARIADB_ROOT_PASSWORD: password
     volumes:
       - mariadb-data:/var/lib/mysql
       - ./mariadb/poc:/docker-entrypoint-initdb.d:ro
@@ -40,19 +40,108 @@ services:
       timeout: 3s
       retries: 30
 
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: dva-minio
+    entrypoint: ["/bin/sh", "/minio/init-bucket.sh"]
+    ports:
+      - "19001:9000"
+      - "19002:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    volumes:
+      - minio-data:/data
+      - ./minio:/minio:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local && test -f /tmp/minio-buckets-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  hive-metastore-db:
+    image: mariadb:10.11.15
+    container_name: dva-hive-metastore-db
+    environment:
+      MARIADB_DATABASE: metastore_v3
+      MARIADB_USER: hive
+      MARIADB_PASSWORD: password
+      MARIADB_ROOT_PASSWORD: password
+    volumes:
+      - hive-metastore-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  hive-metastore:
+    platform: linux/amd64
+    build:
+      context: ./hive-metastore
+    image: dva-hive-metastore:3.0.0
+    container_name: dva-hive-metastore
+    depends_on:
+      hive-metastore-db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./hive-metastore/conf/core-site.xml:/opt/hadoop-3.3.3/etc/hadoop/core-site.xml:ro
+      - ./hive-metastore/conf/metastore-site.xml:/opt/apache-hive-metastore-3.0.0-bin/conf/metastore-site.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9083'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   trino:
-    image: trinodb/trino:452
+    image: trinodb/trino:479
     container_name: dva-trino
     depends_on:
       clickhouse:
         condition: service_healthy
       mariadb:
         condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
     ports:
-      - "18080:8080"
+      - "127.0.0.1:18080:8080"
+      - "443:8443"
     volumes:
       - ./trino/catalog:/etc/trino/catalog:ro
+      - ./trino/config/dev-tls-entrypoint.sh:/etc/trino/dev-tls-entrypoint.sh:ro
+      - ./trino/config/config.properties:/etc/trino/config.properties:ro
+      - ./trino/config/password-authenticator.properties:/etc/trino/password-authenticator.properties:ro
+      - ./trino/config/password.db:/etc/trino/password.db:ro
+    entrypoint: ["/bin/sh", "/etc/trino/dev-tls-entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  trino-init:
+    image: trinodb/trino:479
+    container_name: dva-trino-init
+    depends_on:
+      minio:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+    environment:
+      TRINO_URL: https://trino:8443
+      TRINO_USER: poc_user
+      TRINO_PASSWORD: password
+    volumes:
+      - ./clickhouse:/clickhouse:ro
+      - ./mariadb:/mariadb:ro
+      - ./minio:/minio:ro
+      - ./trino/init-schemas.sh:/init/init-schemas.sh:ro
+    entrypoint: ["/bin/sh", "/init/init-schemas.sh"]
 
 volumes:
   clickhouse-data:
   mariadb-data:
+  minio-data:
+  hive-metastore-db-data:

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from core.models import FieldSpec
+from core.field_spec import FieldSpec
 
 
 COMMON_FIELD: dict[str, Any] = {
@@ -75,8 +75,6 @@ def boolean_field(name: str = "active", **overrides: Any) -> dict[str, Any]:
 def spec_document(*fields: Mapping[str, Any], **overrides: Any) -> dict[str, Any]:
     return {
         "table_name": "orders",
-        "version": 1,
-        "change_note": "test",
         "fields": [dict(field) for field in fields] or [string_field()],
         **overrides,
     }
