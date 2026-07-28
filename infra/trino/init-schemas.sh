@@ -2,9 +2,6 @@
 
 set -eu
 
-TRINO_URL="${TRINO_URL:-http://trino:8080}"
-TRINO_USER="${TRINO_USER:-poc_user}"
-
 minio_bucket_name() {
     printf '%s' "$1" | tr '_' '-'
 }
@@ -14,7 +11,9 @@ execute_sql() {
     sql="$2"
 
     response="$(curl --fail --silent --show-error \
+        --insecure \
         --request POST \
+        --user "${TRINO_USER}:${TRINO_PASSWORD}" \
         --header "X-Trino-User: ${TRINO_USER}" \
         --header "Content-Type: text/plain" \
         --data-binary "${sql}" \
@@ -31,7 +30,10 @@ execute_sql() {
             break
         fi
 
-        response="$(curl --fail --silent --show-error "${next_uri}")"
+        response="$(curl --fail --silent --show-error \
+            --insecure \
+            --user "${TRINO_USER}:${TRINO_PASSWORD}" \
+            "${next_uri}")"
     done
 
     printf 'Initialized %s\n' "${label}"

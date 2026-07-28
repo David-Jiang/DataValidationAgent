@@ -27,29 +27,8 @@ docker compose up -d --build
 | MinIO Console          | `http://localhost:19002` | MinIO 管理介面（`admin`／`password`） |
 | Hive Metastore         | 僅限容器內部             | 透過 Thrift 提供 Iceberg catalog      |
 | Hive Metastore MariaDB | 僅限容器內部             | 專用的 Hive Metastore metadata DB     |
-| Trino HTTP             | `http://localhost:18080` | 僅限 Trino 主機本機測試                |
+| Trino HTTP             | `http://localhost:18080` | 僅限 Trino 主機本機測試               |
 | Trino HTTPS            | `https://<主機 IP>:443`  | 供另一台開發機上的 Airflow 連線       |
-
-Trino 啟動時會在 container 內產生開發用途的自簽憑證，同一個 Trino service 會同時提供 HTTP 與 HTTPS。HTTP port `18080` 只綁定 `127.0.0.1`，其他開發機只能使用 HTTPS port `443`。
-
-Airflow 的 Trino Connection 請設定 Host 為執行 Trino 的開發機 IP、Port 為 `443`，Extra 例如：
-
-```json
-{
-  "protocol": "https",
-  "catalog": "mariadb",
-  "verify": false
-}
-```
-
-這組憑證每次重建 Trino container 都會重新產生，而且未經 CA 信任，因此開發環境需要使用 `"verify": false`。此設定只提供傳輸加密，沒有加入使用者驗證，請僅在受信任的開發網路使用，並確認 Trino 主機 firewall 允許另一台開發機存取 TCP `443`。
-
-啟動後可分別驗證：
-
-```bash
-curl http://localhost:18080/v1/info
-curl -k https://<主機 IP>:443/v1/info
-```
 
 MinIO／Iceberg 的架構如下：
 
@@ -142,12 +121,10 @@ docker compose up trino-init
 
 ## 驗證 Trino SQL
 
-Trino HTTP API 可能會在 query result 準備完成前先回傳第一個 response。如果 response 包含 `nextUri`，client 必須持續輪詢，直到 response 不再包含 `nextUri`。
-
-保留 `demo/.env`，並透過一行指令將其中的變數注入 Python process：
+Trino 連線設定與示範 SQL 都直接定義在 `demo/test-trino.py` 上方，執行：
 
 ```bash
-set -a; source demo/.env; set +a; python3 demo/test-trino.py
+python3 demo/test-trino.py
 ```
 
 範例程式會透過 Trino JOIN 以下三張 table：
@@ -173,6 +150,43 @@ docker compose down -v
 ```
 
 > `docker compose down -v` 會刪除 named volumes，其中的 ClickHouse、MariaDB、Hive Metastore 與 MinIO 資料都無法由 Docker Compose 自動復原。
+
+## 修改 Trino 密碼
+
+`trino/config/password.db` 只保存 bcrypt hash，不保存明文密碼。若要修改 `poc_user` 的密碼，請在 `infra` 目錄執行：
+
+```bash
+htpasswd -B -C 10 trino/config/password.db poc_user
+```
+
+指令會互動式要求輸入並確認新密碼，因此新密碼不會出現在 shell history。`-B` 代表使用 bcrypt，`-C 10` 是 Trino 支援的 bcrypt cost。若 Linux 尚未提供 `htpasswd`，Debian／Ubuntu 的套件名稱是 `apache2-utils`，RHEL 系列的套件名稱是 `httpd-tools`。
+
+產生新 hash 後，將同一組明文密碼同步到以下位置：
+
+```text
+docker-compose.yml -> trino-init.environment.TRINO_PASSWORD
+demo/test-trino.py -> TRINO_PASSWORD
+```
+
+接著只需重新建立 Trino 並重跑初始化程序：
+
+```bash
+docker compose up -d --no-deps --force-recreate trino
+docker compose up --no-deps --force-recreate trino-init
+```
+
+最後以互動方式輸入新密碼驗證 HTTPS，避免將密碼直接寫入指令：
+
+```bash
+curl -k --user poc_user https://<主機 IP>:443/v1/info
+```
+
+啟動後可分別驗證：
+
+```bash
+curl --header "X-Trino-User: poc_user" http://localhost:18080/v1/info
+curl -k --user poc_user:password https://<主機 IP>:443/v1/info
+```
 
 ## 附錄：本機 DataHub
 
