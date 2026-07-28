@@ -27,7 +27,29 @@ docker compose up -d --build
 | MinIO Console          | `http://localhost:19002` | MinIO 管理介面（`admin`／`password`） |
 | Hive Metastore         | 僅限容器內部             | 透過 Thrift 提供 Iceberg catalog      |
 | Hive Metastore MariaDB | 僅限容器內部             | 專用的 Hive Metastore metadata DB     |
-| Trino HTTP             | `http://localhost:18080` | 跨資料來源 SQL 查詢引擎               |
+| Trino HTTP             | `http://localhost:18080` | 僅限 Trino 主機本機測試                |
+| Trino HTTPS            | `https://<主機 IP>:443`  | 供另一台開發機上的 Airflow 連線       |
+
+Trino 啟動時會在 container 內產生開發用途的自簽憑證，同一個 Trino service 會同時提供 HTTP 與 HTTPS。HTTP port `18080` 只綁定 `127.0.0.1`，其他開發機只能使用 HTTPS port `443`。
+
+Airflow 的 Trino Connection 請設定 Host 為執行 Trino 的開發機 IP、Port 為 `443`，Extra 例如：
+
+```json
+{
+  "protocol": "https",
+  "catalog": "mariadb",
+  "verify": false
+}
+```
+
+這組憑證每次重建 Trino container 都會重新產生，而且未經 CA 信任，因此開發環境需要使用 `"verify": false`。此設定只提供傳輸加密，沒有加入使用者驗證，請僅在受信任的開發網路使用，並確認 Trino 主機 firewall 允許另一台開發機存取 TCP `443`。
+
+啟動後可分別驗證：
+
+```bash
+curl http://localhost:18080/v1/info
+curl -k https://<主機 IP>:443/v1/info
+```
 
 MinIO／Iceberg 的架構如下：
 

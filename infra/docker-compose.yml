@@ -106,9 +106,13 @@ services:
       hive-metastore:
         condition: service_healthy
     ports:
-      - "18080:8080"
+      - "127.0.0.1:18080:8080"
+      - "443:8443"
     volumes:
+      - ./trino/config.properties:/etc/trino/config.properties:ro
       - ./trino/catalog:/etc/trino/catalog:ro
+      - ./trino/dev-tls-entrypoint.sh:/etc/trino/dev-tls-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/etc/trino/dev-tls-entrypoint.sh"]
     healthcheck:
       test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
       interval: 10s
