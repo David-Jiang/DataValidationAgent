@@ -106,9 +106,15 @@ services:
       hive-metastore:
         condition: service_healthy
     ports:
-      - "18080:8080"
+      - "127.0.0.1:18080:8080"
+      - "443:8443"
     volumes:
       - ./trino/catalog:/etc/trino/catalog:ro
+      - ./trino/config/dev-tls-entrypoint.sh:/etc/trino/dev-tls-entrypoint.sh:ro
+      - ./trino/config/config.properties:/etc/trino/config.properties:ro
+      - ./trino/config/password-authenticator.properties:/etc/trino/password-authenticator.properties:ro
+      - ./trino/config/password.db:/etc/trino/password.db:ro
+    entrypoint: ["/bin/sh", "/etc/trino/dev-tls-entrypoint.sh"]
     healthcheck:
       test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
       interval: 10s
@@ -124,8 +130,9 @@ services:
       trino:
         condition: service_healthy
     environment:
-      TRINO_URL: http://trino:8080
+      TRINO_URL: https://trino:8443
       TRINO_USER: poc_user
+      TRINO_PASSWORD: password
     volumes:
       - ./clickhouse:/clickhouse:ro
       - ./mariadb:/mariadb:ro
