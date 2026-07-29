@@ -1,4 +1,3 @@
-import base64
 import json
 import time
 from urllib.error import HTTPError
@@ -6,7 +5,6 @@ from urllib.request import Request, urlopen
 
 TRINO_URL = "http://localhost:18080"
 TRINO_USER = "poc_user"
-TRINO_PASSWORD = "password"
 SQL = """SELECT
     o.order_id,
     o.customer_id,
@@ -25,21 +23,14 @@ ORDER BY o.order_id"""
 
 def trino_request(url, method="GET", body=None):
     data = body.encode("utf-8") if body is not None else None
-    headers = {
-        "X-Trino-User": TRINO_USER,
-        "Content-Type": "text/plain",
-    }
-    if url.lower().startswith("https://"):
-        credentials = base64.b64encode(
-            f"{TRINO_USER}:{TRINO_PASSWORD}".encode("utf-8")
-        ).decode("ascii")
-        headers["Authorization"] = f"Basic {credentials}"
-
     request = Request(
         url,
         data=data,
         method=method,
-        headers=headers,
+        headers={
+            "X-Trino-User": TRINO_USER,
+            "Content-Type": "text/plain",
+        },
     )
 
     try:

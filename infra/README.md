@@ -151,43 +151,6 @@ docker compose down -v
 
 > `docker compose down -v` 會刪除 named volumes，其中的 ClickHouse、MariaDB、Hive Metastore 與 MinIO 資料都無法由 Docker Compose 自動復原。
 
-## 修改 Trino 密碼
-
-`trino/config/password.db` 只保存 bcrypt hash，不保存明文密碼。若要修改 `poc_user` 的密碼，請在 `infra` 目錄執行：
-
-```bash
-htpasswd -B -C 10 trino/config/password.db poc_user
-```
-
-指令會互動式要求輸入並確認新密碼，因此新密碼不會出現在 shell history。`-B` 代表使用 bcrypt，`-C 10` 是 Trino 支援的 bcrypt cost。若 Linux 尚未提供 `htpasswd`，Debian／Ubuntu 的套件名稱是 `apache2-utils`，RHEL 系列的套件名稱是 `httpd-tools`。
-
-產生新 hash 後，將同一組明文密碼同步到以下位置：
-
-```text
-docker-compose.yml -> trino-init.environment.TRINO_PASSWORD
-demo/test-trino.py -> TRINO_PASSWORD
-```
-
-接著只需重新建立 Trino 並重跑初始化程序：
-
-```bash
-docker compose up -d --no-deps --force-recreate trino
-docker compose up --no-deps --force-recreate trino-init
-```
-
-最後以互動方式輸入新密碼驗證 HTTPS，避免將密碼直接寫入指令：
-
-```bash
-curl -k --user poc_user https://<主機 IP>:443/v1/info
-```
-
-啟動後可分別驗證：
-
-```bash
-curl --header "X-Trino-User: poc_user" http://localhost:18080/v1/info
-curl -k --user poc_user:password https://<主機 IP>:443/v1/info
-```
-
 ## 附錄：本機 DataHub
 
 ### 前置需求

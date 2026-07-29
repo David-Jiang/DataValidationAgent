@@ -11,9 +11,7 @@ execute_sql() {
     sql="$2"
 
     response="$(curl --fail --silent --show-error \
-        --insecure \
         --request POST \
-        --user "${TRINO_USER}:${TRINO_PASSWORD}" \
         --header "X-Trino-User: ${TRINO_USER}" \
         --header "Content-Type: text/plain" \
         --data-binary "${sql}" \
@@ -30,10 +28,7 @@ execute_sql() {
             break
         fi
 
-        response="$(curl --fail --silent --show-error \
-            --insecure \
-            --user "${TRINO_USER}:${TRINO_PASSWORD}" \
-            "${next_uri}")"
+        response="$(curl --fail --silent --show-error "${next_uri}")"
     done
 
     printf 'Initialized %s\n' "${label}"
