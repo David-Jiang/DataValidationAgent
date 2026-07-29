@@ -20,8 +20,8 @@ docker compose up -d --build
 
 | 服務                   | URL／Port                | 用途                                  |
 | ---------------------- | ------------------------ | ------------------------------------- |
-| ClickHouse             | `localhost:19000`        | 本機 OLAP database                    |
-| ClickHouse HTTP        | `http://localhost:18123` | ClickHouse HTTP 介面                  |
+| ClickHouse             | `localhost:18123`        | 本機 OLAP database                    |
+| ClickHouse HTTP        | `http://localhost:19000` | ClickHouse HTTP 介面                  |
 | MariaDB                | `localhost:13306`        | 本機關聯式 database                   |
 | MinIO API              | `http://localhost:19001` | S3 相容物件儲存                       |
 | MinIO Console          | `http://localhost:19002` | MinIO 管理介面（`admin`／`password`） |
